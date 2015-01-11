@@ -11,7 +11,7 @@ var ensure = function(msg, cond) {
   if (!cond) abort('expectation failed! (' + msg + ')');
 };
 
-var operators = ['+', '-', '*', '/', '<', '>'];
+var operators = ['+', '-', '*', '/', '<', '>', '?'];
 var bools = ['#f', '#t'];
 var nums = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 var alpha = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];
@@ -98,6 +98,28 @@ var lex = function(str) {
   return tokens;
 };
 
+var parse = function(tokens) {
+  if (tokens[0].type != 'LPAREN') return tokens[0];
+
+  var stack = [[]];
+
+  var t;
+  while ((t = tokens.shift()) !== undefined) {
+    if (t.type == 'LPAREN') {
+      var newStack = [];
+      stack[stack.length - 1].push(newStack);
+      stack.push(newStack);
+    } else if (t.type == 'RPAREN')
+      stack.pop();
+    else
+      stack[stack.length - 1].push(t);
+  }
+
+  if (stack.length > 1) abort('non empty expr stack: ' + stack.length);
+
+  return stack[0][0];
+};
+
 var id = (function() {
   var _id = 0;
   return function() {
@@ -107,7 +129,11 @@ var id = (function() {
 
 
 var compile = function(prog) {
-  var tokens = lex(prog);
+  var ast = parse(lex(prog));
+
+  var isAtom = function(e) {
+    return !(e instanceof Array) || e.length == 0;
+  };
 
   var isFixnum = function(n) {
     var wordSize = 4;
@@ -119,25 +145,54 @@ var compile = function(prog) {
     return lowerLimit <= num && num <= upperLimit;
   };
 
-  var immediate = function() {
-    var v;
-    var t = tokens[0];
+  var immediate = function(t) {
     if (t.type == 'NUMBER') {
       if (!isFixnum(t.val)) abort('illegal fixnum: ' + t.val);
-      v = Number(tokens[0].val) << 2;
+      return Number(t.val) << 2;
     } else if (t.type == 'BOOL')
-      v = t.val ? 0x6F : 0x2F;
+      return t.val ? 0x6F : 0x2F;
     else if (t.type == 'CHAR')
-      v = t.val.charCodeAt(0) << 8 | 0x0F;
-    else if (t.type == 'LPAREN' && tokens[1].type == 'RPAREN')
-      v = 0x3F;
-    return v;
+      return t.val.charCodeAt(0) << 8 | 0x0F;
+    else if (t instanceof Array && t.length == 0)
+      return 0x3F;
+
+    abort('unkown immediate: ' + JSON.stringify(t, null, 2));
+    return null;
+  };
+
+  var numToken = function(n) {
+    return { type: 'NUMBER', val: String(n) };
+  };
+
+  var primitive = function(name, args) {
+    if (args.length != 1)
+      abort('invalid arg count, expected 1 but was: ' + args.length);
+
+    var asm = expression(args[0]);
+
+    if (name.val == 'fxadd1') {
+      asm += '  addl $' + immediate(numToken(1)) + ', %eax\n';
+    } else if (name.val == 'fxsub1') {
+      asm += '  subl $' + immediate(numToken(1)) + ', %eax\n';
+    } else {
+      abort('unkown primitive: ' + JSON.stringify(name, null, 2));
+    }
+
+    return asm;
+  };
+
+  var expression = function(ast) {
+    if (isAtom(ast)) {
+	    return '  movl	$' + immediate(ast) + ', %eax\n';
+    } else {
+      return primitive(ast[0], ast.slice(1));
+    }
   };
 
   return '	.text\n' +
 	  '  .globl	scheme_entry\n' +
     'scheme_entry:\n' +
-	  '  movl	$' + immediate(tokens) + ', %eax\n' +
+    expression(ast) +
 	  '  ret\n';
 };
 
@@ -205,8 +260,18 @@ test('#\\Z', '#\\Z');
 test('#\\(', '#\\(');
 test('#\\*', '#\\*');
 test('()', '()');
+test('(fxadd1 1)', '2');
+test('(fxadd1 (fxsub1 1))', '1');
+test('(fxadd1 (fxadd1 (fxadd1 1)))', '4');
+test('(fxsub1 0)', '-1');
 runTests();
 
-compileAndRun('1111', function(output) {
+var prog = '(fxadd1 (fxsub1 (fxadd1 42)))';
+
+compileAndRun(prog, function(output) {
   console.log( 'result: ' + output );
 });
+/*
+*/
+
+console.log( compile(prog) );
