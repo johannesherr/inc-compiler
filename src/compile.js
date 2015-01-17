@@ -1,4 +1,5 @@
-// 15:19
+// 13:36 - 15:10
+
 
 var fs = require('fs'),
     exec = require('child_process').exec;
@@ -129,6 +130,10 @@ var id = (function() {
 
 
 var compile = function(prog) {
+  var CHAR_TAG = 0x0F;
+  var CHAR_OFFSET = 8;
+  var INT_OFFSET = 2;
+
   var ast = parse(lex(prog));
 
   var isAtom = function(e) {
@@ -148,11 +153,11 @@ var compile = function(prog) {
   var immediate = function(t) {
     if (t.type == 'NUMBER') {
       if (!isFixnum(t.val)) abort('illegal fixnum: ' + t.val);
-      return Number(t.val) << 2;
+      return Number(t.val) << INT_OFFSET;
     } else if (t.type == 'BOOL')
       return t.val ? 0x6F : 0x2F;
     else if (t.type == 'CHAR')
-      return t.val.charCodeAt(0) << 8 | 0x0F;
+      return t.val.charCodeAt(0) << CHAR_OFFSET | CHAR_TAG;
     else if (t instanceof Array && t.length == 0)
       return 0x3F;
 
@@ -164,19 +169,41 @@ var compile = function(prog) {
     return { type: 'NUMBER', val: String(n) };
   };
 
+  var primitives = {
+    fxadd1: {
+      argCount: 1,
+      gen: function() {
+        return '  addl $' + immediate(numToken(1)) + ', %eax\n';
+      }
+    },
+    fxsub1: {
+      argCount: 1,
+      gen: function() {
+        return '  subl $' + immediate(numToken(1)) + ', %eax\n';
+      }
+    },
+    'fixnum->char': {
+      argCount: 1,
+      gen: function() {
+        return '  shll $' + (CHAR_OFFSET - INT_OFFSET) + ', %eax\n' +
+          '  orl $' + CHAR_TAG + ', %eax\n';
+      }
+    }
+  };
+
   var primitive = function(name, args) {
-    if (args.length != 1)
-      abort('invalid arg count, expected 1 but was: ' + args.length);
+    var config = primitives[name.val];
+    if (!config) {
+      abort('unkown primitive: ' + name.val);
+    }
+
+    if (args.length != config.argCount) {
+      abort('invalid arg count, expected ' + config.argCount +
+            ' but was: ' + args.length);
+    }
 
     var asm = expression(args[0]);
-
-    if (name.val == 'fxadd1') {
-      asm += '  addl $' + immediate(numToken(1)) + ', %eax\n';
-    } else if (name.val == 'fxsub1') {
-      asm += '  subl $' + immediate(numToken(1)) + ', %eax\n';
-    } else {
-      abort('unkown primitive: ' + JSON.stringify(name, null, 2));
-    }
+    asm += config.gen();
 
     return asm;
   };
@@ -264,9 +291,12 @@ test('(fxadd1 1)', '2');
 test('(fxadd1 (fxsub1 1))', '1');
 test('(fxadd1 (fxadd1 (fxadd1 1)))', '4');
 test('(fxsub1 0)', '-1');
+test('(fixnum->char 106)', '#\\j');
+test('(fixnum->char 65)', '#\\A');
+test('(fixnum->char 122)', '#\\z');
 runTests();
 
-var prog = '(fxadd1 (fxsub1 (fxadd1 42)))';
+var prog = '(fixnum->char 106)';
 
 compileAndRun(prog, function(output) {
   console.log( 'result: ' + output );
