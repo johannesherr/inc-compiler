@@ -1,5 +1,16 @@
-// 13:36 - 15:10
+// 21:11-
 
+/*
+ (defun asm () (interactive)
+ (save-buffer)
+ (shell-command "gcc -Wall mine0.s runtime.c -o test0"))
+
+ (global-set-key (kbd "<f12>") 'asm)
+
+ (defun run-comp () (interactive) (shell-command "nodejs compile.js"))
+
+ (global-set-key (kbd "<f11>") 'run-comp)
+ */
 
 var fs = require('fs'),
     exec = require('child_process').exec;
@@ -133,6 +144,11 @@ var compile = function(prog) {
   var CHAR_TAG = 0x0F;
   var CHAR_OFFSET = 8;
   var INT_OFFSET = 2;
+  var FX_MASK = 0x3;
+  var FX_TAG = 0x0;
+  var BOOL_TRUE = 0x6F;
+  var BOOL_FALSE = 0x2F;
+  var BOOL_BIT = 6;
 
   var ast = parse(lex(prog));
 
@@ -155,7 +171,7 @@ var compile = function(prog) {
       if (!isFixnum(t.val)) abort('illegal fixnum: ' + t.val);
       return Number(t.val) << INT_OFFSET;
     } else if (t.type == 'BOOL')
-      return t.val ? 0x6F : 0x2F;
+      return t.val ? BOOL_TRUE : BOOL_FALSE;
     else if (t.type == 'CHAR')
       return t.val.charCodeAt(0) << CHAR_OFFSET | CHAR_TAG;
     else if (t instanceof Array && t.length == 0)
@@ -187,6 +203,16 @@ var compile = function(prog) {
       gen: function() {
         return '  shll $' + (CHAR_OFFSET - INT_OFFSET) + ', %eax\n' +
           '  orl $' + CHAR_TAG + ', %eax\n';
+      }
+    },
+    'fixnum?': {
+      argCount: 1,
+      gen: function() {
+        return '  andl  $' + FX_MASK + ', %eax\n' +
+'  cmpl  $' + FX_TAG + ', %eax\n' +
+'  sete  %al\n' +
+'  shl   $' + BOOL_BIT + ', %eax\n' +
+'  or    $' + BOOL_FALSE + ', %eax\n';
       }
     }
   };
@@ -294,6 +320,16 @@ test('(fxsub1 0)', '-1');
 test('(fixnum->char 106)', '#\\j');
 test('(fixnum->char 65)', '#\\A');
 test('(fixnum->char 122)', '#\\z');
+test('(fixnum? 122)', '#t');
+test('(fixnum? #\\a)', '#f');
+test('(fixnum? 0)', '#t');
+test('(fixnum? -1)', '#t');
+test('(fixnum? -1000)', '#t');
+test('(fixnum? 1000)', '#t');
+test('(fixnum? #t)', '#f');
+test('(fixnum? #f)', '#f');
+test('(fixnum? -536870912)', '#t');
+test('(fixnum? 536870911)', '#t');
 runTests();
 
 var prog = '(fixnum->char 106)';
