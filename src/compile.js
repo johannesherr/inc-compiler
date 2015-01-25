@@ -266,6 +266,13 @@ var compile = function(prog) {
         '  cmpl  $' + CHAR_TAG + ', %eax\n' +
           zfToBool();
       }
+    },
+    'fxlognot': {
+      argCount: 1,
+      gen: function() {
+        return '  xorl $0xFFFFFFFF, %eax\n' +
+        '  xorl  $' + FX_MASK + ', %eax\n';
+      }
     }
   };
 
@@ -347,7 +354,7 @@ var runTests = function() {
       pending--;
 
       if (pending == 0)
-        console.log( nPass + ' tests passed, ' + nFailed + ' failed.' );
+        console.log(new Date() + ':\n' + nPass + ' tests passed, ' + nFailed + ' failed.' );
     });
   });
 
@@ -405,6 +412,9 @@ test('(not (not #f))', '#f');
 test('(not (not #t))', '#t');
 test('(not (not (not #t)))', '#f');
 test('(not (fxzero? 42))', '#t');
+test('(not 42)', '#f');
+test('(not ())', '#f');
+test('(not #\\a)', '#f');
 test('(boolean? #t)', '#t');
 test('(boolean? #f)', '#t');
 test('(boolean? 42)', '#f');
@@ -417,9 +427,14 @@ test('(char? ())', '#f');
 test('(char? #\\a)', '#t');
 test('(char? #\\Z)', '#t');
 test('(char? #\\~)', '#t');
+test('(fxlognot 0)', '-1');
+test('(fxlognot -1)', '0');
+test('(fxlognot 1)', '-2');
+test('(fxlognot 42)', '-43');
 runTests();
 
-var prog = '(fixnum->char 106)';
+
+var prog = '(fxlognot -1)';
 
 /*
 compileAndRun(prog, function(output) {
