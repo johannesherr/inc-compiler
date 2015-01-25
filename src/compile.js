@@ -201,6 +201,9 @@ var compile = function(prog) {
     return { type: 'BOOL', val: v };
   };
 
+  var nameToken = function(v) {
+    return { type: 'NAME', val: v };
+  };
 
   var zfToBool = function() {
     return '  sete %al\n' +
@@ -341,9 +344,31 @@ var compile = function(prog) {
     return asm;
   };
 
-  var andConditional = function() {
-    // TODO: continue
-    return expression(boolToken(true));
+  var andConditional = function(nodes) {
+    if (nodes.length == 0) {
+      return expression(boolToken(true));
+    } else if (nodes.length == 1) {
+      return expression(nodes[0]);
+    } else {
+      var subExpr = [nameToken('and')];
+      subExpr = subExpr.concat(nodes.slice(1));
+      return expression(
+        [nameToken('if'), nodes[0], subExpr, boolToken(false)]);
+    }
+  };
+
+  var orConditional = function(nodes) {
+    if (nodes.length == 0) {
+      return expression(boolToken(true));
+    } else if (nodes.length == 1) {
+      return expression(nodes[0]);
+    } else {
+      var subExpr = [nameToken('or')];
+      subExpr = subExpr.concat(nodes.slice(1));
+      // the result is computed twice!!
+      return expression(
+        [nameToken('if'), nodes[0], nodes[0], subExpr]);
+    }
   };
 
   var isLiteral = function(node, str) {
@@ -357,6 +382,8 @@ var compile = function(prog) {
       return ifConditional(ast.slice(1));
     } else if (isLiteral(ast[0], 'and')) {
       return andConditional(ast.slice(1));
+    } else if (isLiteral(ast[0], 'or')) {
+      return orConditional(ast.slice(1));
     } else {
       return primitive(ast[0], ast.slice(1));
     }
@@ -498,6 +525,21 @@ test('(if (not #f) 2 4)', '2');
 test('(if (not #f) (fxadd1 2) 4)', '3');
 test('(if 42 2 4)', '2');
 test('(and)', '#t');
+test('(and 42)', '42');
+test('(and #t)', '#t');
+test('(and #f 42)', '#f');
+test('(and #t 42)', '42');
+test('(and #t #\\a -1)', '-1');
+test('(or)', '#t');
+test('(or 42)', '42');
+test('(or #t)', '#t');
+test('(or #f 42)', '42');
+test('(or 42 #f)', '42');
+test('(or #f #f)', '#f');
+test('(or #t 42)', '#t');
+test('(or #t #\\a -1)', '#t');
+test('(or 42 #\\a -1)', '42');
+
 runTests();
 
 
