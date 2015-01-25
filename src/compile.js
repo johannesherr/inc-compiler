@@ -149,6 +149,7 @@ var compile = function(prog) {
   var BOOL_TRUE = 0x6F;
   var BOOL_FALSE = 0x2F;
   var BOOL_BIT = 6;
+  var NULL_TAG = 0x3F;
 
   var ast = parse(lex(prog));
 
@@ -175,7 +176,7 @@ var compile = function(prog) {
     else if (t.type == 'CHAR')
       return t.val.charCodeAt(0) << CHAR_OFFSET | CHAR_TAG;
     else if (t instanceof Array && t.length == 0)
-      return 0x3F;
+      return NULL_TAG;
 
     abort('unkown immediate: ' + JSON.stringify(t, null, 2));
     return null;
@@ -183,6 +184,13 @@ var compile = function(prog) {
 
   var numToken = function(n) {
     return { type: 'NUMBER', val: String(n) };
+  };
+
+  var zfToBool = function() {
+    return '  sete %al\n' +
+      '  movzbl %al, %eax\n' +
+      '  shll   $' + BOOL_BIT + ', %eax\n' +
+      '  orl    $' + BOOL_FALSE + ', %eax\n';
   };
 
   var primitives = {
@@ -205,14 +213,41 @@ var compile = function(prog) {
           '  orl $' + CHAR_TAG + ', %eax\n';
       }
     },
+    'char->fixnum': {
+      argCount: 1,
+      gen: function() {
+        return '  shrl $' + (CHAR_OFFSET - INT_OFFSET) + ', %eax\n';
+      }
+    },
+    'fxzero?': {
+      argCount: 1,
+      gen: function() {
+        return '  cmpl $' + FX_TAG + ', %eax\n' +
+          zfToBool();
+      }
+    },
     'fixnum?': {
       argCount: 1,
       gen: function() {
         return '  andl  $' + FX_MASK + ', %eax\n' +
-'  cmpl  $' + FX_TAG + ', %eax\n' +
-'  sete  %al\n' +
-'  shl   $' + BOOL_BIT + ', %eax\n' +
-'  or    $' + BOOL_FALSE + ', %eax\n';
+          '  cmpl  $' + FX_TAG + ', %eax\n' +
+          '  sete  %al\n' +
+          '  shl   $' + BOOL_BIT + ', %eax\n' +
+          '  or    $' + BOOL_FALSE + ', %eax\n';
+      }
+    },
+    'null?': {
+      argCount: 1,
+      gen: function() {
+        return '  cmpl  $' + NULL_TAG + ', %eax\n' +
+          zfToBool();
+      }
+    },
+    'not': {
+      argCount: 1,
+      gen: function() {
+        return '  cmpl  $' + BOOL_TRUE + ', %eax\n' +
+          zfToBool();
       }
     }
   };
@@ -286,7 +321,8 @@ var runTests = function() {
     pending++;
     compileAndRun(t[0], function(output) {
       if (output.trim() != t[1]) {
-        console.log('failing test, expected "' + t[1] + '" but was "' + output + '"');
+        console.log('failing test, expected "' + t[1] + '" but was "' + output.trim() +
+                    '", prog:\n' + t[0] + "\n\n");
         nFailed++;
       } else {
         nPass++;
@@ -330,14 +366,34 @@ test('(fixnum? #t)', '#f');
 test('(fixnum? #f)', '#f');
 test('(fixnum? -536870912)', '#t');
 test('(fixnum? 536870911)', '#t');
+test('(char->fixnum #\\j)', '106');
+test('(char->fixnum #\\A)', '65');
+test('(char->fixnum #\\z)', '122');
+test('(fxzero? 536870911)', '#f');
+test('(fxzero? -536870912)', '#f');
+test('(fxzero? 1)', '#f');
+test('(fxzero? -1)', '#f');
+test('(fxzero? 42)', '#f');
+test('(fxzero? 0)', '#t');
+test('(null? ())', '#t');
+test('(null? 0)', '#f');
+test('(null? 1)', '#f');
+test('(null? -1)', '#f');
+test('(null? #f)', '#f');
+test('(null? #t)', '#f');
+test('(null? #\\a)', '#f');
+test('(not #t)', '#f');
+test('(not #f)', '#t');
+test('(not (not #f))', '#f');
+test('(not (not #t))', '#t');
 runTests();
 
 var prog = '(fixnum->char 106)';
 
+/*
 compileAndRun(prog, function(output) {
   console.log( 'result: ' + output );
 });
-/*
 */
 
 console.log( compile(prog) );
