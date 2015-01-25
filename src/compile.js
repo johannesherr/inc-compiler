@@ -291,10 +291,24 @@ var compile = function(prog) {
         return '  xorl $0xFFFFFFFF, %eax\n' +
         '  xorl  $' + FX_MASK + ', %eax\n';
       }
+    },
+    'fx+': {
+      argCount: 2,
+      gen: function(si) {
+        return '  addl ' + si + '(%esp), %eax\n';
+      }
+    },
+    'fx-': {
+      argCount: 2,
+      gen: function(si) {
+        return '  subl %eax, ' + si + '(%esp)\n' +
+          '  movl ' + si + '(%esp), %eax\n';
+      }
     }
+
   };
 
-  var primitive = function(name, args) {
+  var primitive = function(si, name, args) {
     var config = primitives[name.val];
     if (!config) {
       abort('unkown primitive: ' + name.val);
@@ -305,13 +319,21 @@ var compile = function(prog) {
             ' but was: ' + args.length);
     }
 
-    var asm = expression(args[0]);
-    asm += config.gen();
+    var c = config.argCount, tmpSi = si;
+    var asm = expression(si, args[0]);
+    c--;
+    while (c > 0) {
+      asm += '  movl %eax, ' + tmpSi + '(%esp)\n';
+      tmpSi -= 4;
+      asm += expression(tmpSi, args[1]);
+      c--;
+    }
+    asm += config.gen(si);
 
     return asm;
   };
 
-  var ifConditional = function(ast) {
+  var ifConditional = function(si, ast) {
     if (ast.length != 3) {
       abort("conditional with wrong number of arguments (expected 3), was " + ast.length);
     }
@@ -322,21 +344,21 @@ var compile = function(prog) {
         endLabel = uniq_label();
 
     // eval condition
-    asm += expression(ast[0]);
+    asm += expression(si, ast[0]);
 
     // jmp if false
     asm += '  cmp $' + BOOL_FALSE + ', %al\n' +
       '  je ' + falseLabel + '\n';
 
     // true branch
-    asm += expression(ast[1]);
+    asm += expression(si, ast[1]);
 
     // jmp to end
     asm += '  jmp ' + endLabel + '\n';
 
     // false branch
     asm += falseLabel + ':\n';
-    asm += expression(ast[2]);
+    asm += expression(si, ast[2]);
 
     // end
     asm += endLabel + ':\n';
@@ -344,29 +366,29 @@ var compile = function(prog) {
     return asm;
   };
 
-  var andConditional = function(nodes) {
+  var andConditional = function(si, nodes) {
     if (nodes.length == 0) {
-      return expression(boolToken(true));
+      return expression(si, boolToken(true));
     } else if (nodes.length == 1) {
-      return expression(nodes[0]);
+      return expression(si, nodes[0]);
     } else {
       var subExpr = [nameToken('and')];
       subExpr = subExpr.concat(nodes.slice(1));
-      return expression(
+      return expression(si,
         [nameToken('if'), nodes[0], subExpr, boolToken(false)]);
     }
   };
 
-  var orConditional = function(nodes) {
+  var orConditional = function(si, nodes) {
     if (nodes.length == 0) {
-      return expression(boolToken(true));
+      return expression(si, boolToken(true));
     } else if (nodes.length == 1) {
-      return expression(nodes[0]);
+      return expression(si, nodes[0]);
     } else {
       var subExpr = [nameToken('or')];
       subExpr = subExpr.concat(nodes.slice(1));
       // the result is computed twice!!
-      return expression(
+      return expression(si,
         [nameToken('if'), nodes[0], nodes[0], subExpr]);
     }
   };
@@ -375,24 +397,27 @@ var compile = function(prog) {
     return node.type === 'NAME' && node.val === str;
   };
 
-  var expression = function(ast) {
+  var expression = function(si, ast) {
     if (isAtom(ast)) {
 	    return '  movl	$' + immediate(ast) + ', %eax\n';
     } else if (isLiteral(ast[0], 'if')) {
-      return ifConditional(ast.slice(1));
+      return ifConditional(si, ast.slice(1));
     } else if (isLiteral(ast[0], 'and')) {
-      return andConditional(ast.slice(1));
+      return andConditional(si, ast.slice(1));
     } else if (isLiteral(ast[0], 'or')) {
-      return orConditional(ast.slice(1));
+      return orConditional(si, ast.slice(1));
     } else {
-      return primitive(ast[0], ast.slice(1));
+      return primitive(si, ast[0], ast.slice(1));
     }
   };
 
   return '	.text\n' +
 	  '  .globl	scheme_entry\n' +
     'scheme_entry:\n' +
-    expression(ast) +
+    '  movl %esp, %ecx\n' +
+    '  movl 4(%esp), %esp\n' +
+    expression(-4, ast) +
+    '  movl %ecx, %esp\n' +
 	  '  ret\n';
 };
 
@@ -539,6 +564,15 @@ test('(or #f #f)', '#f');
 test('(or #t 42)', '#t');
 test('(or #t #\\a -1)', '#t');
 test('(or 42 #\\a -1)', '42');
+test('(fx+ 1 1)', '2');
+test('(fx+ 1 (fx+ 1 40))', '42');
+test('(fx+ 1 (fx+ (fx+ 1 -1) (fx+ 40 10)))', '51');
+test('(fx- 1 1)', '0');
+test('(fx- (fx+ 42 1) 1)', '42');
+test('(fx+ 1 -1)', '0');
+test('(fxzero? (fx+ 1 -1))', '#t');
+test('(fx+ 5 -10)', '-5');
+test('(fx+ 536870911 1)', '-536870912');
 
 runTests();
 
