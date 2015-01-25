@@ -143,6 +143,7 @@ var id = (function() {
 var compile = function(prog) {
   var CHAR_TAG = 0x0F;
   var CHAR_OFFSET = 8;
+  var CHAR_MASK = 0xFF;
   var INT_OFFSET = 2;
   var FX_MASK = 0x3;
   var FX_TAG = 0x0;
@@ -246,7 +247,23 @@ var compile = function(prog) {
     'not': {
       argCount: 1,
       gen: function() {
-        return '  cmpl  $' + BOOL_TRUE + ', %eax\n' +
+        return '  cmpl  $' + BOOL_FALSE + ', %eax\n' +
+          zfToBool();
+      }
+    },
+    'boolean?': {
+      argCount: 1,
+      gen: function() {
+        return '  orl $' + (1 << BOOL_BIT) + ', %eax\n' +
+        '  cmpl  $' + BOOL_TRUE + ', %eax\n' +
+          zfToBool();
+      }
+    },
+    'char?': {
+      argCount: 1,
+      gen: function() {
+        return '  andl $' + CHAR_MASK + ', %eax\n' +
+        '  cmpl  $' + CHAR_TAG + ', %eax\n' +
           zfToBool();
       }
     }
@@ -386,6 +403,20 @@ test('(not #t)', '#f');
 test('(not #f)', '#t');
 test('(not (not #f))', '#f');
 test('(not (not #t))', '#t');
+test('(not (not (not #t)))', '#f');
+test('(not (fxzero? 42))', '#t');
+test('(boolean? #t)', '#t');
+test('(boolean? #f)', '#t');
+test('(boolean? 42)', '#f');
+test('(boolean? ())', '#f');
+test('(boolean? #\\a)', '#f');
+test('(char? #t)', '#f');
+test('(char? #f)', '#f');
+test('(char? 42)', '#f');
+test('(char? ())', '#f');
+test('(char? #\\a)', '#t');
+test('(char? #\\Z)', '#t');
+test('(char? #\\~)', '#t');
 runTests();
 
 var prog = '(fixnum->char 106)';
