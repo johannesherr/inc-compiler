@@ -132,13 +132,23 @@ var parse = function(tokens) {
   return stack[0][0];
 };
 
-var id = (function() {
-  var _id = 0;
+var idGen = function() {
+  return (function() {
+    var _id = 0;
+    return function() {
+      return _id++;
+    };
+  })();
+};
+
+var id = idGen();
+
+var uniq_label = (function() {
+  var lables = idGen();
   return function() {
-    return _id++;
+    return "L_" + lables();
   };
 })();
-
 
 var compile = function(prog) {
   var CHAR_TAG = 0x0F;
@@ -186,6 +196,11 @@ var compile = function(prog) {
   var numToken = function(n) {
     return { type: 'NUMBER', val: String(n) };
   };
+
+  var boolToken = function(v) {
+    return { type: 'BOOL', val: v };
+  };
+
 
   var zfToBool = function() {
     return '  sete %al\n' +
@@ -293,9 +308,55 @@ var compile = function(prog) {
     return asm;
   };
 
+  var ifConditional = function(ast) {
+    if (ast.length != 3) {
+      abort("conditional with wrong number of arguments (expected 3), was " + ast.length);
+    }
+
+    var asm = '';
+
+    var falseLabel = uniq_label(),
+        endLabel = uniq_label();
+
+    // eval condition
+    asm += expression(ast[0]);
+
+    // jmp if false
+    asm += '  cmp $' + BOOL_FALSE + ', %al\n' +
+      '  je ' + falseLabel + '\n';
+
+    // true branch
+    asm += expression(ast[1]);
+
+    // jmp to end
+    asm += '  jmp ' + endLabel + '\n';
+
+    // false branch
+    asm += falseLabel + ':\n';
+    asm += expression(ast[2]);
+
+    // end
+    asm += endLabel + ':\n';
+
+    return asm;
+  };
+
+  var andConditional = function() {
+    // TODO: continue
+    return expression(boolToken(true));
+  };
+
+  var isLiteral = function(node, str) {
+    return node.type === 'NAME' && node.val === str;
+  };
+
   var expression = function(ast) {
     if (isAtom(ast)) {
 	    return '  movl	$' + immediate(ast) + ', %eax\n';
+    } else if (isLiteral(ast[0], 'if')) {
+      return ifConditional(ast.slice(1));
+    } else if (isLiteral(ast[0], 'and')) {
+      return andConditional(ast.slice(1));
     } else {
       return primitive(ast[0], ast.slice(1));
     }
@@ -431,10 +492,16 @@ test('(fxlognot 0)', '-1');
 test('(fxlognot -1)', '0');
 test('(fxlognot 1)', '-2');
 test('(fxlognot 42)', '-43');
+test('(if #t 2 4)', '2');
+test('(if #f 2 4)', '4');
+test('(if (not #f) 2 4)', '2');
+test('(if (not #f) (fxadd1 2) 4)', '3');
+test('(if 42 2 4)', '2');
+test('(and)', '#t');
 runTests();
 
 
-var prog = '(fxlognot -1)';
+var prog = '(if #f 2 4)';
 
 /*
 compileAndRun(prog, function(output) {
