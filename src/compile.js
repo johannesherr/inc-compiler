@@ -1,4 +1,4 @@
-// 21:11-
+
 
 /*
  (defun asm () (interactive)
@@ -23,7 +23,7 @@ var ensure = function(msg, cond) {
   if (!cond) abort('expectation failed! (' + msg + ')');
 };
 
-var operators = ['+', '-', '*', '/', '<', '>', '?'];
+var operators = ['+', '-', '*', '/', '<', '>', '?', '='];
 var bools = ['#f', '#t'];
 var nums = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 var alpha = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];
@@ -212,6 +212,19 @@ var compile = function(prog) {
       '  orl    $' + BOOL_FALSE + ', %eax\n';
   };
 
+  var fxCmp = function(si, op) {
+    var trueLbl = uniq_label(),
+        endLbl = uniq_label();
+
+    return '  cmp ' + si + '(%esp), %eax\n' +
+      '  ' + op + ' ' + trueLbl + '\n' +
+      '  movl $' + BOOL_FALSE + ', %eax\n' +
+      '  jmp ' + endLbl + '\n' +
+      trueLbl + ':\n' +
+      '  movl $' + BOOL_TRUE + ', %eax\n' +
+      endLbl + ':\n';
+  };
+
   var primitives = {
     fxadd1: {
       argCount: 1,
@@ -304,9 +317,56 @@ var compile = function(prog) {
         return '  subl %eax, ' + si + '(%esp)\n' +
           '  movl ' + si + '(%esp), %eax\n';
       }
+    },
+    'fx=': {
+      argCount: 2,
+      gen: function(si) {
+        return '  cmp ' + si + '(%esp), %eax\n' +
+          zfToBool();
+      }
+    },
+    'fx<': {
+      argCount: 2,
+      gen: function(si) {
+       return fxCmp(si, 'jg');
+      }
+    },
+    'fx<=': {
+      argCount: 2,
+      gen: function(si) {
+       return fxCmp(si, 'jge');
+      }
+    },
+    'fx>': {
+      argCount: 2,
+      gen: function(si) {
+       return fxCmp(si, 'jl');
+      }
+    },
+    'fx>=': {
+      argCount: 2,
+      gen: function(si) {
+       return fxCmp(si, 'jle');
+      }
+    },
+    'fx*': {
+      argCount: 2,
+      gen: function(si) {
+       return '  sar $' + INT_OFFSET + ', %eax\n' +
+        '  imul ' + si + '(%esp), %eax\n';
+      }
     }
-
   };
+
+  var map = {
+    'char=': 'fx=',
+    'char<': 'fx<',
+    'char<=': 'fx<=',
+    'char>': 'fx>',
+    'char>=': 'fx>='
+  };
+  for (var op in map)
+    primitives[op] = primitives[map[op]];
 
   var primitive = function(si, name, args) {
     var config = primitives[name.val];
@@ -573,16 +633,86 @@ test('(fx+ 1 -1)', '0');
 test('(fxzero? (fx+ 1 -1))', '#t');
 test('(fx+ 5 -10)', '-5');
 test('(fx+ 536870911 1)', '-536870912');
+test('(fx= 536870911 1)', '#f');
+test('(fx= 536870911 536870911)', '#t');
+test('(fx= 5 -10)', '#f');
+test('(fx= 5 (fx+ 15 -10))', '#t');
+test('(fx< 536870911 1)', '#f');
+test('(fx< 536870911 536870911)', '#f');
+test('(fx< 1 536870911)', '#t');
+test('(fx< 536870911 -536870912)', '#f');
+test('(fx< -536870912 536870911)', '#t');
+test('(fx< -536870911 -536870910)', '#t');
+test('(fx< 5 -10)', '#f');
+test('(fx< -10 5)', '#t');
+test('(fx< 4 5)', '#t');
+test('(fx< 5 5)', '#f');
+test('(fx< 5 4)', '#f');
+test('(fx< 5 (fx+ 5 1))', '#t');
+test('(fx<= 536870911 1)', '#f');
+test('(fx<= 536870911 536870911)', '#t');
+test('(fx<= 1 536870911)', '#t');
+test('(fx<= 536870911 -536870912)', '#f');
+test('(fx<= -536870912 536870911)', '#t');
+test('(fx<= -536870911 -536870910)', '#t');
+test('(fx<= 5 -10)', '#f');
+test('(fx<= -10 5)', '#t');
+test('(fx<= 4 5)', '#t');
+test('(fx<= 5 5)', '#t');
+test('(fx<= 5 4)', '#f');
+test('(fx<= 5 (fx+ 5 1))', '#t');
+test('(fx> 536870911 1)', '#t');
+test('(fx> 536870911 536870911)', '#f');
+test('(fx> 1 536870911)', '#f');
+test('(fx> 536870911 -536870912)', '#t');
+test('(fx> -536870912 536870911)', '#f');
+test('(fx> -536870911 -536870910)', '#f');
+test('(fx> 5 -10)', '#t');
+test('(fx> -10 5)', '#f');
+test('(fx> 4 5)', '#f');
+test('(fx> 5 5)', '#f');
+test('(fx> 5 4)', '#t');
+test('(fx> 5 (fx+ 5 1))', '#f');
+test('(fx>= 536870911 1)', '#t');
+test('(fx>= 536870911 536870911)', '#t');
+test('(fx>= 1 536870911)', '#f');
+test('(fx>= 536870911 -536870912)', '#t');
+test('(fx>= -536870912 536870911)', '#f');
+test('(fx>= -536870911 -536870910)', '#f');
+test('(fx>= 5 -10)', '#t');
+test('(fx>= -10 5)', '#f');
+test('(fx>= 4 5)', '#f');
+test('(fx>= 5 5)', '#t');
+test('(fx>= 5 4)', '#t');
+test('(fx>= 5 (fx+ 5 1))', '#f');
+test('(char= #\\a #\\a)', '#t');
+test('(char= #\\a #\\b)', '#f');
+test('(char< #\\a #\\a)', '#f');
+test('(char< #\\c #\\a)', '#f');
+test('(char< #\\a #\\b)', '#t');
+test('(char<= #\\a #\\a)', '#t');
+test('(char<= #\\c #\\a)', '#f');
+test('(char<= #\\a #\\b)', '#t');
+test('(char> #\\a #\\a)', '#f');
+test('(char> #\\c #\\a)', '#t');
+test('(char> #\\a #\\b)', '#f');
+test('(char>= #\\a #\\a)', '#t');
+test('(char>= #\\c #\\a)', '#t');
+test('(char>= #\\a #\\b)', '#f');
+test('(fx* 2 3)', '6');
+test('(fx* 2 268435455)', '536870910');
+
 
 runTests();
 
 
-var prog = '(if #f 2 4)';
+var prog = '(fx< -536870911 -536870910)';
 
 /*
 compileAndRun(prog, function(output) {
   console.log( 'result: ' + output );
 });
-*/
+
 
 console.log( compile(prog) );
+ */

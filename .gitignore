@@ -1,4 +1,6 @@
 src/test[0-9][0-9]
+src/test[0-9][0-9][0-9]
 src/test[0-9]
 src/mine[0-9][0-9].s
+src/mine[0-9][0-9][0-9].s
 src/mine[0-9].s
