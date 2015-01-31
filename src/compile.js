@@ -156,6 +156,7 @@ var compile = function(prog) {
   var CHAR_MASK = 0xFF;
   var INT_OFFSET = 2;
   var FX_MASK = 0x3;
+  var FX_MASK_INV = 0xFFFFFFFFC;
   var FX_TAG = 0x0;
   var BOOL_TRUE = 0x6F;
   var BOOL_FALSE = 0x2F;
@@ -355,6 +356,19 @@ var compile = function(prog) {
        return '  sar $' + INT_OFFSET + ', %eax\n' +
         '  imul ' + si + '(%esp), %eax\n';
       }
+    },
+    'fx/': {
+      argCount: 2,
+      gen: function(si) {
+       return '  sar $' + INT_OFFSET + ', %eax\n' +
+          '  movl %eax, ' + (si - 4) + '(%esp)\n' +
+          '  movl ' + si + '(%esp), %eax\n' +
+          '  movl %edx, ' + (si - 8) + '(%esp)\n' +
+          '  cdq\n' +
+          '  idivl ' + (si - 4) + '(%esp)\n' +
+          '  movl ' + (si - 8) + '(%esp), %edx\n' +
+          '  andl $' + FX_MASK_INV + ', %eax\n';
+      }
     }
   };
 
@@ -533,11 +547,14 @@ var runTests = function() {
 
 };
 
+var quickTest = true;
+
 test('101', '101');
 test('0', '0');
 test('42', '42');
 test('-1', '-1');
 test('100000', '100000');
+if (!quickTest) {
 test('#f', '#f');
 test('#t', '#t');
 test('#\\a', '#\\a');
@@ -691,6 +708,7 @@ test('(char< #\\a #\\a)', '#f');
 test('(char< #\\c #\\a)', '#f');
 test('(char< #\\a #\\b)', '#t');
 test('(char<= #\\a #\\a)', '#t');
+}
 test('(char<= #\\c #\\a)', '#f');
 test('(char<= #\\a #\\b)', '#t');
 test('(char> #\\a #\\a)', '#f');
@@ -701,14 +719,21 @@ test('(char>= #\\c #\\a)', '#t');
 test('(char>= #\\a #\\b)', '#f');
 test('(fx* 2 3)', '6');
 test('(fx* 2 268435455)', '536870910');
+test('(fx/ 4 2)', '2');
+test('(fx/ 5 2)', '2');
+test('(fx/ 6 2)', '3');
+test('(fx/ -6 2)', '-3');
+test('(fx/ -6 -2)', '3');
+test('(fx/ 6 -2)', '-3');
+test('(fx/ 536870910 2)', '268435455');
 
 
 runTests();
 
 
-var prog = '(fx< -536870911 -536870910)';
-
 /*
+var prog = '(fx/ -6 -2)';
+
 compileAndRun(prog, function(output) {
   console.log( 'result: ' + output );
 });
