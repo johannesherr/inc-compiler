@@ -382,7 +382,7 @@ var compile = function(prog) {
   for (var op in map)
     primitives[op] = primitives[map[op]];
 
-  var primitive = function(si, name, args) {
+  var primitive = function(env, si, name, args) {
     var config = primitives[name.val];
     if (!config) {
       abort('unkown primitive: ' + name.val);
@@ -394,12 +394,12 @@ var compile = function(prog) {
     }
 
     var c = config.argCount, tmpSi = si;
-    var asm = expression(si, args[0]);
+    var asm = expression(env, si, args[0]);
     c--;
     while (c > 0) {
       asm += '  movl %eax, ' + tmpSi + '(%esp)\n';
       tmpSi -= 4;
-      asm += expression(tmpSi, args[1]);
+      asm += expression(env, tmpSi, args[1]);
       c--;
     }
     asm += config.gen(si);
@@ -407,7 +407,7 @@ var compile = function(prog) {
     return asm;
   };
 
-  var ifConditional = function(si, ast) {
+  var ifConditional = function(env, si, ast) {
     if (ast.length != 3) {
       abort("conditional with wrong number of arguments (expected 3), was " + ast.length);
     }
@@ -418,21 +418,21 @@ var compile = function(prog) {
         endLabel = uniq_label();
 
     // eval condition
-    asm += expression(si, ast[0]);
+    asm += expression(env, si, ast[0]);
 
     // jmp if false
     asm += '  cmp $' + BOOL_FALSE + ', %al\n' +
       '  je ' + falseLabel + '\n';
 
     // true branch
-    asm += expression(si, ast[1]);
+    asm += expression(env, si, ast[1]);
 
     // jmp to end
     asm += '  jmp ' + endLabel + '\n';
 
     // false branch
     asm += falseLabel + ':\n';
-    asm += expression(si, ast[2]);
+    asm += expression(env, si, ast[2]);
 
     // end
     asm += endLabel + ':\n';
@@ -440,48 +440,95 @@ var compile = function(prog) {
     return asm;
   };
 
-  var andConditional = function(si, nodes) {
+  var andConditional = function(env, si, nodes) {
     if (nodes.length == 0) {
-      return expression(si, boolToken(true));
+      return expression(env, si, boolToken(true));
     } else if (nodes.length == 1) {
-      return expression(si, nodes[0]);
+      return expression(env, si, nodes[0]);
     } else {
       var subExpr = [nameToken('and')];
       subExpr = subExpr.concat(nodes.slice(1));
-      return expression(si,
+      return expression(env, si,
         [nameToken('if'), nodes[0], subExpr, boolToken(false)]);
     }
   };
 
-  var orConditional = function(si, nodes) {
+  var orConditional = function(env, si, nodes) {
     if (nodes.length == 0) {
-      return expression(si, boolToken(true));
+      return expression(env, si, boolToken(true));
     } else if (nodes.length == 1) {
-      return expression(si, nodes[0]);
+      return expression(env, si, nodes[0]);
     } else {
       var subExpr = [nameToken('or')];
       subExpr = subExpr.concat(nodes.slice(1));
       // the result is computed twice!!
-      return expression(si,
+      return expression(env, si,
         [nameToken('if'), nodes[0], nodes[0], subExpr]);
     }
+  };
+
+  var letBlock = function(parentEnv, si, parts) {
+    if (parts.length != 2) abort("a let blocks requires definition and" +
+                                 " body (2 elements, but was " + parts.length + ")");
+
+    // create new scope
+    var env = {};
+    for (var name in parentEnv) {
+      env[name] = parentEnv[name];
+    }
+
+    var defs = parts[0];
+    var body = parts[1];
+
+    var asm = '';
+
+    for (var i = 0; i < defs.length; i += 2) {
+      asm += expression(env, si, defs[i + 1]);
+      asm += '  movl %eax, ' + si + '(%esp) # var ' + defs[i].val  + '\n';
+      env[defs[i].val] = { pos: si };
+      si -= 4;
+    }
+
+    asm += expression(env, si, body);
+    return asm;
+  };
+
+  var varAccess = function(env, si, ast) {
+    var varElem = env[ast.val];
+    if (!varElem) abort('unkown variable: ' + ast.val);
+	  return '  movl	' + varElem.pos + '(%esp), %eax\n';
   };
 
   var isLiteral = function(node, str) {
     return node.type === 'NAME' && node.val === str;
   };
 
-  var expression = function(si, ast) {
-    if (isAtom(ast)) {
+  var isImmediate = function(ast) {
+    if (!isAtom(ast)) return false;
+    if (ast instanceof Array) return true;
+
+    return ['BOOL', 'NUMBER', 'CHAR', 'STRING'].indexOf(ast.type) !== -1;
+  };
+
+  var isVariable = function(ast) {
+    return isAtom(ast) && ast.type == 'NAME';
+  };
+
+  var expression = function(env, si, ast) {
+    if (isImmediate(ast)) {
 	    return '  movl	$' + immediate(ast) + ', %eax\n';
+    } else if (isVariable(ast)) {
+      return varAccess(env, si, ast);
     } else if (isLiteral(ast[0], 'if')) {
-      return ifConditional(si, ast.slice(1));
+      return ifConditional(env, si, ast.slice(1));
     } else if (isLiteral(ast[0], 'and')) {
-      return andConditional(si, ast.slice(1));
+      return andConditional(env, si, ast.slice(1));
     } else if (isLiteral(ast[0], 'or')) {
-      return orConditional(si, ast.slice(1));
+      return orConditional(env, si, ast.slice(1));
+    } else if (isLiteral(ast[0], 'let')) {
+      return letBlock(env, si, ast.slice(1));
     } else {
-      return primitive(si, ast[0], ast.slice(1));
+      return primitive(env, si, ast[0], ast.slice(1));
     }
   };
 
@@ -490,7 +537,7 @@ var compile = function(prog) {
     'scheme_entry:\n' +
     '  movl %esp, %ecx\n' +
     '  movl 4(%esp), %esp\n' +
-    expression(-4, ast) +
+    expression({}, -4, ast) +
     '  movl %ecx, %esp\n' +
 	  '  ret\n';
 };
@@ -530,19 +577,25 @@ var runTests = function() {
   var pending = 0, nPass = 0, nFailed = 0;
   tests.forEach(function(t) {
     pending++;
-    compileAndRun(t[0], function(output) {
-      if (output.trim() != t[1]) {
-        console.log('failing test, expected "' + t[1] + '" but was "' + output.trim() +
-                    '", prog:\n' + t[0] + "\n\n");
-        nFailed++;
-      } else {
-        nPass++;
-      }
-      pending--;
+    try {
+      compileAndRun(t[0], function(output) {
+        if (output.trim() != t[1]) {
+          console.log('failing test, expected "' + t[1] + '" but was "' + output.trim() +
+                      '", prog:\n' + t[0] + "\n\n");
+          nFailed++;
+        } else {
+          nPass++;
+        }
+        pending--;
 
-      if (pending == 0)
-        console.log(new Date() + ':\n' + nPass + ' tests passed, ' + nFailed + ' failed.' );
-    });
+        if (pending == 0)
+          console.log(new Date() + ':\n' + nPass + ' tests passed, ' + nFailed + ' failed.' );
+      });
+    } catch (e) {
+      pending--; nFailed++;
+      console.log( 'Test failed with exception: ' + t[0]);
+      console.log( e );
+    }
   });
 
 };
@@ -726,18 +779,25 @@ test('(fx/ -6 2)', '-3');
 test('(fx/ -6 -2)', '3');
 test('(fx/ 6 -2)', '-3');
 test('(fx/ 536870910 2)', '268435455');
+test('(let (a 40 b 2) a)', '40');
+test('(let (a 40 b 2) b)', '2');
+test('(let (a 40 b 2) (fx+ a b))', '42');
+test('(let (foo 10) (let (bar 5) (fx+ foo bar)))', '15');
+test('(let (foo 10) (let (foo 5) foo))', '5');
+test('(fx+ (let (foo 10) foo) (let (foo 5) foo))', '15');
+test('(let (foo 10) (fx+ (let (foo 5) foo) foo))', '15');
+test('(let (a 40 b (fx+ 2 a)) (fx+ a b))', '82');
+
 
 
 runTests();
 
 
-/*
-var prog = '(fx/ -6 -2)';
+var prog = '(let (a 40 b 2) (fx+ a b))';
 
+/*
 compileAndRun(prog, function(output) {
   console.log( 'result: ' + output );
 });
-
-
 console.log( compile(prog) );
  */
