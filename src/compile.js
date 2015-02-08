@@ -499,6 +499,31 @@ var compile = function(prog) {
 	  return '  movl	' + varElem.pos + '(%esp), %eax\n';
   };
 
+  var apply = function(env, si, ast) {
+    var fnLabel = env[ast[0].val];
+
+    var asm = '';
+
+    var oldSi = si;
+    // space for return address
+    si -= 4;
+
+    // push arg values onto the stack
+    for (var i = 1; i < ast.length; i++) {
+      asm += '  # arg(' + (i - 1) + ') = ' + ast[i].val + '\n';
+      asm += expression(env, si, ast[i]);
+      asm += '  movl %eax, ' + si + '(%esp)\n';
+      si -= 4;
+    }
+
+    var offset = Math.abs(oldSi) - 4;
+    asm += '  subl $' + offset + ', %esp\n';
+    asm += '  call ' + fnLabel + '\n';
+    asm += '  addl $' + offset + ', %esp\n';
+
+    return asm;
+  };
+
   var isLiteral = function(node, str) {
     return node.type === 'NAME' && node.val === str;
   };
@@ -527,8 +552,62 @@ var compile = function(prog) {
       return orConditional(env, si, ast.slice(1));
     } else if (isLiteral(ast[0], 'let')) {
       return letBlock(env, si, ast.slice(1));
+    } else if (isLiteral(ast[0], 'app')) {
+      return apply(env, si, ast.slice(1));
     } else {
       return primitive(env, si, ast[0], ast.slice(1));
+    }
+  };
+
+  var lambda = function(env, ast) {
+    var si = -4;
+    ensure(ast[0].val == 'lambda', 'lambda expected, was: ' + ast[0].val);
+    var params = ast[1];
+    var body = ast[2];
+
+    var asm = '';
+
+    for (var i = 0; i < params.length; i++) {
+      env[params[i].val] = { pos: si};
+      si -= 4;
+    }
+
+    asm += expression(env, si, body);
+    asm += '  ret\n';
+
+    return asm;
+  };
+
+  var letrec = function(env, si, ast) {
+    var defs = ast[1];
+    if (defs.length % 2 != 0) abort('letrec definitons must be even');
+
+    var asm = '';
+    asm += '  # letrec\n';
+
+    var bodyLabel = uniq_label();
+    asm += '  jmp ' + bodyLabel + '\n';
+
+    for (var i = 0; i < defs.length; i+=2) {
+      var fnName = defs[i].val;
+      var label = uniq_label();
+      env[fnName] = label;
+
+      asm += label + ':\n';
+      asm += lambda(env, defs[i + 1]);
+    }
+
+    asm += bodyLabel + ':\n';
+    asm += expression(env, si, ast[2]);
+
+    return asm;
+  };
+
+  var programme = function(ast) {
+    if (!isAtom(ast) && ast[0].val == 'letrec') {
+      return letrec({}, -4, ast);
+    } else {
+      return expression({}, -4, ast);
     }
   };
 
@@ -537,7 +616,7 @@ var compile = function(prog) {
     'scheme_entry:\n' +
     '  movl %esp, %ecx\n' +
     '  movl 4(%esp), %esp\n' +
-    expression({}, -4, ast) +
+    programme(ast) +
     '  movl %ecx, %esp\n' +
 	  '  ret\n';
 };
@@ -601,6 +680,7 @@ var runTests = function() {
 };
 
 var quickTest = true;
+
 
 test('101', '101');
 test('0', '0');
@@ -787,13 +867,27 @@ test('(let (foo 10) (let (foo 5) foo))', '5');
 test('(fx+ (let (foo 10) foo) (let (foo 5) foo))', '15');
 test('(let (foo 10) (fx+ (let (foo 5) foo) foo))', '15');
 test('(let (a 40 b (fx+ 2 a)) (fx+ a b))', '82');
-
+test('(letrec (myadd (lambda (a b) (fx+ a b))) (app myadd 2 40))', '42');
+test('(letrec (myadd (lambda (a b) (fx+ a b))' +
+     '         myplusX (lambda (foo) (fx+ 100 foo)))' +
+     '    (app myplusX (app myadd 2 40)))', '142');
+test('(letrec (fib (lambda (n) (if (fx= n 1) 1 (if (fx= n 2) 1 ' +
+     ' (fx+ (app fib (fx- n 1)) (app fib (fx- n 2)))))))' +
+     '  (app fib 30))', '832040');
+test('(letrec (fib-help (lambda (a b n) ' +
+     '             (if (fx= n 1)' +
+     '               b' +
+     '               (if (fx= n 2)' +
+     '                b' +
+     '                (app fib-help b (fx+ a b) (fx- n 1)))))' +
+     '        fib (lambda (n) (app fib-help 1 1 n)))' +
+     '             (app fib 30))', '832040');
 
 
 runTests();
 
 
-var prog = '(let (a 40 b 2) (fx+ a b))';
+var prog = '(letrec (myadd (lambda (a b) (fx+ a b))) (app myadd 2 40))';
 
 /*
 compileAndRun(prog, function(output) {
