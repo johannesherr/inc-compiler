@@ -407,7 +407,7 @@ var compile = function(prog) {
     return asm;
   };
 
-  var ifConditional = function(env, si, ast) {
+  var ifConditional = function(env, si, ast, tail) {
     if (ast.length != 3) {
       abort("conditional with wrong number of arguments (expected 3), was " + ast.length);
     }
@@ -425,14 +425,14 @@ var compile = function(prog) {
       '  je ' + falseLabel + '\n';
 
     // true branch
-    asm += expression(env, si, ast[1]);
+    asm += expression(env, si, ast[1], tail);
 
     // jmp to end
     asm += '  jmp ' + endLabel + '\n';
 
     // false branch
-    asm += falseLabel + ':\n';
-    asm += expression(env, si, ast[2]);
+    asm += falseLabel + ':                      # false-branch\n';
+    asm += expression(env, si, ast[2], tail);
 
     // end
     asm += endLabel + ':\n';
@@ -467,7 +467,7 @@ var compile = function(prog) {
     }
   };
 
-  var letBlock = function(parentEnv, si, parts) {
+  var letBlock = function(parentEnv, si, parts, tail) {
     if (parts.length != 2) abort("a let blocks requires definition and" +
                                  " body (2 elements, but was " + parts.length + ")");
 
@@ -489,7 +489,7 @@ var compile = function(prog) {
       si -= 4;
     }
 
-    asm += expression(env, si, body);
+    asm += expression(env, si, body, tail);
     return asm;
   };
 
@@ -499,7 +499,19 @@ var compile = function(prog) {
 	  return '  movl	' + varElem.pos + '(%esp), %eax\n';
   };
 
-  var apply = function(env, si, ast) {
+  var dbgStr = function(ast) {
+    if (ast instanceof Array) {
+      var ret = '( ';
+      for (var i = 0; i < ast.length; i++) {
+        ret += dbgStr(ast[i]) + ' ';
+      }
+      return ret + ')';
+    } else {
+      return ast.val;
+    }
+  };
+
+  var apply = function(env, si, ast, tail) {
     var fnLabel = env[ast[0].val];
 
     var asm = '';
@@ -508,18 +520,33 @@ var compile = function(prog) {
     // space for return address
     si -= 4;
 
+    var arg2Stk = {};
     // push arg values onto the stack
     for (var i = 1; i < ast.length; i++) {
-      asm += '  # arg(' + (i - 1) + ') = ' + ast[i].val + '\n';
+      asm += '                        ';
+      asm += '  # arg(' + (i - 1) + ') = ' + dbgStr(ast[i]) + '\n';
       asm += expression(env, si, ast[i]);
       asm += '  movl %eax, ' + si + '(%esp)\n';
+      arg2Stk[i] = si;
       si -= 4;
     }
 
-    var offset = Math.abs(oldSi) - 4;
-    asm += '  subl $' + offset + ', %esp\n';
-    asm += '  call ' + fnLabel + '\n';
-    asm += '  addl $' + offset + ', %esp\n';
+    if (tail) {
+      // copy arg values over locals
+      var relSi = -4;
+      for (var j = 1; j < ast.length; j++) {
+        asm += '  movl ' + arg2Stk[j] + '(%esp), %eax\n';
+        asm += '  movl %eax, ' + relSi + '(%esp)\n';
+        relSi -= 4;
+      }
+
+      asm += '  jmp ' + fnLabel + '\n';
+    } else {
+      var offset = Math.abs(oldSi) - 4;
+      asm += '  subl $' + offset + ', %esp\n';
+      asm += '  call ' + fnLabel + '\n';
+      asm += '  addl $' + offset + ', %esp\n';
+    }
 
     return asm;
   };
@@ -539,27 +566,27 @@ var compile = function(prog) {
     return isAtom(ast) && ast.type == 'NAME';
   };
 
-  var expression = function(env, si, ast) {
+  var expression = function(env, si, ast, tail) {
     if (isImmediate(ast)) {
 	    return '  movl	$' + immediate(ast) + ', %eax\n';
     } else if (isVariable(ast)) {
       return varAccess(env, si, ast);
     } else if (isLiteral(ast[0], 'if')) {
-      return ifConditional(env, si, ast.slice(1));
+      return ifConditional(env, si, ast.slice(1), tail);
     } else if (isLiteral(ast[0], 'and')) {
       return andConditional(env, si, ast.slice(1));
     } else if (isLiteral(ast[0], 'or')) {
       return orConditional(env, si, ast.slice(1));
     } else if (isLiteral(ast[0], 'let')) {
-      return letBlock(env, si, ast.slice(1));
+      return letBlock(env, si, ast.slice(1), tail);
     } else if (isLiteral(ast[0], 'app')) {
-      return apply(env, si, ast.slice(1));
+      return apply(env, si, ast.slice(1), tail);
     } else {
       return primitive(env, si, ast[0], ast.slice(1));
     }
   };
 
-  var lambda = function(env, ast) {
+  var lambda = function(env, ast, tail) {
     var si = -4;
     ensure(ast[0].val == 'lambda', 'lambda expected, was: ' + ast[0].val);
     var params = ast[1];
@@ -572,7 +599,7 @@ var compile = function(prog) {
       si -= 4;
     }
 
-    asm += expression(env, si, body);
+    asm += expression(env, si, body, tail);
     asm += '  ret\n';
 
     return asm;
@@ -593,12 +620,12 @@ var compile = function(prog) {
       var label = uniq_label();
       env[fnName] = label;
 
-      asm += label + ':\n';
-      asm += lambda(env, defs[i + 1]);
+      asm += label + ':               # fn ' + fnName + '(..)\n';
+      asm += lambda(env, defs[i + 1], true);
     }
 
-    asm += bodyLabel + ':\n';
-    asm += expression(env, si, ast[2]);
+    asm += bodyLabel + ':             # letrec-body\n';
+    asm += expression(env, si, ast[2], false);
 
     return asm;
   };
@@ -679,7 +706,7 @@ var runTests = function() {
 
 };
 
-var quickTest = true;
+var quickTest = false;
 
 
 test('101', '101');
@@ -882,16 +909,31 @@ test('(letrec (fib-help (lambda (a b n) ' +
      '                (app fib-help b (fx+ a b) (fx- n 1)))))' +
      '        fib (lambda (n) (app fib-help 1 1 n)))' +
      '             (app fib 30))', '832040');
+test('(letrec (sum (lambda (n ac)' +
+'(if (fxzero? n)' +
+'ac' +
+'(app sum (fxsub1 n) (fx+ n ac)))))' +
+'(app sum 10 0))', '55');
+test('(letrec (myadd (lambda (a b) '
+      + '(if (fxzero? a) b (app myadd (fxsub1 a) (fxadd1 b))))) (app myadd 22000 40))', '22040');
+test('(letrec (myadd (lambda (a b) '
+      + '(if (fxzero? a) b (let (diff 1) (app myadd (fx- a diff) (fx+ diff b))))))' +
+     ' (app myadd 22000 40))', '22040');
 
 
 runTests();
 
 
-var prog = '(letrec (myadd (lambda (a b) (fx+ a b))) (app myadd 2 40))';
+var prog = '(letrec (myadd (lambda (a b) '
+      + '(if (fxzero? a) b (let (diff 1) (app myadd (fx- a diff) (fx+ diff b))))))' +
+     ' (app myadd 22000 40))';
 
 /*
 compileAndRun(prog, function(output) {
   console.log( 'result: ' + output );
 });
-console.log( compile(prog) );
+
+var asm = compile(prog);
+console.log( asm );
+build(asm);
  */
