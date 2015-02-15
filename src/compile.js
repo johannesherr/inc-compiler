@@ -145,8 +145,8 @@ var id = idGen();
 
 var uniq_label = (function() {
   var lables = idGen();
-  return function() {
-    return "L_" + lables();
+  return function(name) {
+    return "L_" + lables() + (name ? '_' + name.replace(/-/g, '_') : '');
   };
 })();
 
@@ -440,30 +440,30 @@ var compile = function(prog) {
     return asm;
   };
 
-  var andConditional = function(env, si, nodes) {
+  var andConditional = function(env, si, nodes, tail) {
     if (nodes.length == 0) {
-      return expression(env, si, boolToken(true));
+      return expression(env, si, boolToken(true), tail);
     } else if (nodes.length == 1) {
-      return expression(env, si, nodes[0]);
+      return expression(env, si, nodes[0], tail);
     } else {
       var subExpr = [nameToken('and')];
       subExpr = subExpr.concat(nodes.slice(1));
       return expression(env, si,
-        [nameToken('if'), nodes[0], subExpr, boolToken(false)]);
+        [nameToken('if'), nodes[0], subExpr, boolToken(false)], tail);
     }
   };
 
-  var orConditional = function(env, si, nodes) {
+  var orConditional = function(env, si, nodes, tail) {
     if (nodes.length == 0) {
-      return expression(env, si, boolToken(true));
+      return expression(env, si, boolToken(true), tail);
     } else if (nodes.length == 1) {
-      return expression(env, si, nodes[0]);
+      return expression(env, si, nodes[0], tail);
     } else {
       var subExpr = [nameToken('or')];
       subExpr = subExpr.concat(nodes.slice(1));
       // the result is computed twice!!
       return expression(env, si,
-        [nameToken('if'), nodes[0], nodes[0], subExpr]);
+        [nameToken('if'), nodes[0], nodes[0], subExpr], tail);
     }
   };
 
@@ -574,9 +574,9 @@ var compile = function(prog) {
     } else if (isLiteral(ast[0], 'if')) {
       return ifConditional(env, si, ast.slice(1), tail);
     } else if (isLiteral(ast[0], 'and')) {
-      return andConditional(env, si, ast.slice(1));
+      return andConditional(env, si, ast.slice(1), tail);
     } else if (isLiteral(ast[0], 'or')) {
-      return orConditional(env, si, ast.slice(1));
+      return orConditional(env, si, ast.slice(1), tail);
     } else if (isLiteral(ast[0], 'let')) {
       return letBlock(env, si, ast.slice(1), tail);
     } else if (isLiteral(ast[0], 'app')) {
@@ -617,7 +617,7 @@ var compile = function(prog) {
 
     for (var i = 0; i < defs.length; i+=2) {
       var fnName = defs[i].val;
-      var label = uniq_label();
+      var label = uniq_label(fnName);
       env[fnName] = label;
 
       asm += label + ':               # fn ' + fnName + '(..)\n';
@@ -655,7 +655,7 @@ var build = function(asm, cb) {
   fs.writeFileSync(asmFile, asm);
   exec('gcc -Wall ' + asmFile + ' runtime.c -o ' + binFile, function(err) {
     if (err) throw err;
-    cb(binFile);
+    if (cb) cb(binFile);
   });
 };
 var run = function(file, cb) {
@@ -706,7 +706,7 @@ var runTests = function() {
 
 };
 
-var quickTest = false;
+var quickTest = true;
 
 
 test('101', '101');
@@ -919,14 +919,25 @@ test('(letrec (myadd (lambda (a b) '
 test('(letrec (myadd (lambda (a b) '
       + '(if (fxzero? a) b (let (diff 1) (app myadd (fx- a diff) (fx+ diff b))))))' +
      ' (app myadd 22000 40))', '22040');
+test('(letrec (myadd (lambda (a b) '
+      + '(or (and (fxzero? a) b)' +
+      '      (app myadd (fxsub1 a) (fxadd1 b)))))' +
+     ' (app myadd 5461 40))', '5501');
 
 
 runTests();
 
 
+// var prog = '(letrec (myadd (lambda (a b) '
+//       + '(if (fxzero? a) b (app myadd (fxsub1 a) (fxadd1 b)))))' +
+//      ' (app myadd 5461 40))';
+
+
 var prog = '(letrec (myadd (lambda (a b) '
-      + '(if (fxzero? a) b (let (diff 1) (app myadd (fx- a diff) (fx+ diff b))))))' +
-     ' (app myadd 22000 40))';
+      + '(or (and (fxzero? a) b)' +
+      '      (app myadd (fxsub1 a) (fxadd1 b)))))' +
+     ' (app myadd 5461 40))';
+
 
 /*
 compileAndRun(prog, function(output) {
@@ -936,4 +947,4 @@ compileAndRun(prog, function(output) {
 var asm = compile(prog);
 console.log( asm );
 build(asm);
- */
+*/
