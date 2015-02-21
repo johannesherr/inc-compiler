@@ -162,6 +162,7 @@ var compile = function(prog) {
   var BOOL_FALSE = 0x2F;
   var BOOL_BIT = 6;
   var NULL_TAG = 0x3F;
+  var TYPE_OFFSET = 3;
   var PAIR_TAG = 1;
   var PAIR_MASK = 0x7;
   var SIZE_PAIR = 8;
@@ -232,6 +233,23 @@ var compile = function(prog) {
       trueLbl + ':\n' +
       '  movl $' + BOOL_TRUE + ', %eax\n' +
       endLbl + ':\n';
+  };
+  var fxToInt = function() {
+    return '  sar $' + INT_OFFSET + ', %eax\n';
+  };
+
+  var eightByteAlign = function(si) {
+    var endLabel = uniq_label('is_aligned');
+    return '  movl %eax, ' + si + '(%esp)\n' +
+      '  shl $' + (4 * 8 - TYPE_OFFSET) + ', %eax\n' +
+      '  shr $' + (4 * 8 - TYPE_OFFSET) + ', %eax\n' +
+      '  testl %eax, %eax\n' +
+      '  movl ' + si + '(%esp), %eax\n' +
+      '  jz ' + endLabel + '\n' +
+      '  addl $8, %eax\n' +
+      '  shr $' + TYPE_OFFSET + ', %eax\n' +
+      '  shl $' + TYPE_OFFSET + ', %eax\n' +
+      endLabel + ':\n';
   };
 
   var primitives = {
@@ -361,14 +379,14 @@ var compile = function(prog) {
     'fx*': {
       argCount: 2,
       gen: function(si) {
-       return '  sar $' + INT_OFFSET + ', %eax\n' +
+       return fxToInt() +
         '  imul ' + si + '(%esp), %eax\n';
       }
     },
     'fx/': {
       argCount: 2,
       gen: function(si) {
-       return '  sar $' + INT_OFFSET + ', %eax\n' +
+       return fxToInt() +
           '  movl %eax, ' + (si - 4) + '(%esp)\n' +
           '  movl ' + si + '(%esp), %eax\n' +
           '  movl %edx, ' + (si - 8) + '(%esp)\n' +
@@ -407,6 +425,28 @@ var compile = function(prog) {
         return '  andl $' + PAIR_MASK + ', %eax\n' +
           '  cmpl $' + PAIR_TAG + ', %eax\n' +
           zfToBool();
+      }
+    },
+    'make-vector': {
+      argCount: 2,
+      // TODO: initialise vector
+      gen: function(si) {
+        return '  movl ' + si + '(%esp), %eax\n' +
+          '  movl %eax, (%ebp)\n' +
+          '  movl %ebp, ' + (si - 4) + '(%esp)\n' +
+          fxToInt() +
+          '  imul $4, %eax\n' +
+          '  addl $4, %eax\n' +
+          eightByteAlign(si - 8) +
+          '  addl %eax, %ebp\n' +
+          '  movl ' + (si - 4) + '(%esp), %eax\n' +
+          '  orl $' + VECTOR_TAG + ', %eax\n';
+      }
+    },
+    'vector-length': {
+      argCount: 1,
+      gen: function(si) {
+        return '  movl ' + (0 - VECTOR_TAG) + '(%eax), %eax\n';
       }
     }
   };
@@ -991,6 +1031,20 @@ test('(pair? (cons #f #t))', '#t');
 test('(pair? (cons #f (cons 40 2)))', '#t');
 test('(let (ll (cons 42 (cons 2 (cons 101 ()))))' +
      '  (car (cdr (cdr ll))))', '101');
+test('(vector-length (make-vector 4 #t))', '4');
+// resulting heap position is already aligned (4*1+4 == 8)
+test('(let (v (make-vector 1 #t)' +
+    '       p (cons 2 3))' +
+    '   (pair? p))', '#t');
+test('(let (v (make-vector 1 #t)' +
+    '       p (cons 2 3))' +
+    '   (vector-length v))', '1');
+// resulting heap position is not aligned (4*4+4 == 20 -> 24)
+test('(let (v (make-vector 4 #t)' +
+    '       p (cons 2 3))' +
+    '   (pair? p))', '#t');
+
+
 
 
 
