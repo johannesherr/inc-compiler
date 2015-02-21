@@ -54,11 +54,28 @@ static void deallocate_protected_space(char* p, int size) {
   if (status != 0) { printf("unmap failed"); }
 }
 
+typedef struct {
+  void* eax;
+  void* ebx;
+  void* ecx;
+  void* edx;
+  void* esi;
+  void* edi;
+  void* ebp;
+  void* esp;
+} context;
+
 int main(int argc, char** argv) {
   int stack_size = 16 * 4096;
   char* stack_top = allocate_protected_space(stack_size);
   char* stack_base = stack_top + stack_size;
-  print_ptr(scheme_entry(stack_base));
+
+  int heap_size = 16 * 4096;
+  char* heap_top = allocate_protected_space(heap_size);
+
+  context ctx;
+
+  print_ptr(scheme_entry(&ctx, stack_base, heap_top));
   deallocate_protected_space(stack_top, stack_size);
   return 0;
 }

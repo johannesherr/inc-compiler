@@ -162,6 +162,14 @@ var compile = function(prog) {
   var BOOL_FALSE = 0x2F;
   var BOOL_BIT = 6;
   var NULL_TAG = 0x3F;
+  var PAIR_TAG = 1;
+  var PAIR_MASK = 0x7;
+  var SIZE_PAIR = 8;
+  var CAR_OFFSET = 0;
+  var CDR_OFFSET = 4;
+  var VECTOR_TAG = 5;
+  var STRING_TAG = 6;
+
 
   var ast = parse(lex(prog));
 
@@ -369,6 +377,37 @@ var compile = function(prog) {
           '  movl ' + (si - 8) + '(%esp), %edx\n' +
           '  andl $' + FX_MASK_INV + ', %eax\n';
       }
+    },
+    cons: {
+      argCount: 2,
+      gen: function(si) {
+        return '  movl %eax, ' + CDR_OFFSET + '(%ebp)\n' +
+          '  movl ' + si + '(%esp), %eax\n' +
+          '  movl %eax, ' + CAR_OFFSET + '(%ebp)\n' +
+          '  movl %ebp, %eax\n' +
+          '  orl $' + PAIR_TAG + ', %eax\n' +
+          '  add $' + SIZE_PAIR + ', %ebp\n';
+      }
+    },
+    car: {
+      argCount: 1,
+      gen: function(si) {
+        return '  movl ' + (-1 + CAR_OFFSET) + '(%eax), %eax\n';
+      }
+    },
+    cdr: {
+      argCount: 1,
+      gen: function(si) {
+        return '  movl ' + (-1 + CDR_OFFSET) + '(%eax), %eax\n';
+      }
+    },
+    'pair?': {
+      argCount: 1,
+      gen: function(si) {
+        return '  andl $' + PAIR_MASK + ', %eax\n' +
+          '  cmpl $' + PAIR_TAG + ', %eax\n' +
+          zfToBool();
+      }
     }
   };
 
@@ -399,7 +438,7 @@ var compile = function(prog) {
     while (c > 0) {
       asm += '  movl %eax, ' + tmpSi + '(%esp)\n';
       tmpSi -= 4;
-      asm += expression(env, tmpSi, args[1]);
+      asm += expression(env, tmpSi, args[c]);
       c--;
     }
     asm += config.gen(si);
@@ -641,10 +680,25 @@ var compile = function(prog) {
   return '	.text\n' +
 	  '  .globl	scheme_entry\n' +
     'scheme_entry:\n' +
-    '  movl %esp, %ecx\n' +
-    '  movl 4(%esp), %esp\n' +
+    // pointer to struct
+    '  movl 4(%esp), %ecx\n' +
+    // save registers
+    '  movl %ebx, 4(%ecx)\n' +
+    '  movl %esi, 16(%ecx)\n' +
+    '  movl %edi, 20(%ecx)\n' +
+    '  movl %ebp, 24(%ecx)\n' +
+    '  movl %esp, 28(%ecx)\n' +
+    // set stack pointer and heap pointer
+    '  movl 12(%esp), %ebp\n' +
+    '  movl 8(%esp), %esp\n' +
+
     programme(ast) +
-    '  movl %ecx, %esp\n' +
+
+    '  movl 4(%ecx), %ebx\n' +
+    '  movl 16(%ecx), %esi\n' +
+    '  movl 20(%ecx), %edi\n' +
+    '  movl 24(%ecx), %ebp\n' +
+    '  movl 28(%ecx), %esp\n' +
 	  '  ret\n';
 };
 
@@ -914,15 +968,30 @@ test('(letrec (sum (lambda (n ac)' +
 'ac' +
 '(app sum (fxsub1 n) (fx+ n ac)))))' +
 '(app sum 10 0))', '55');
-test('(letrec (myadd (lambda (a b) '
-      + '(if (fxzero? a) b (app myadd (fxsub1 a) (fxadd1 b))))) (app myadd 22000 40))', '22040');
-test('(letrec (myadd (lambda (a b) '
-      + '(if (fxzero? a) b (let (diff 1) (app myadd (fx- a diff) (fx+ diff b))))))' +
+test('(letrec (myadd (lambda (a b) ' +
+     '(if (fxzero? a) b (app myadd (fxsub1 a) (fxadd1 b))))) (app myadd 22000 40))', '22040');
+test('(letrec (myadd (lambda (a b) ' +
+     '(if (fxzero? a) b (let (diff 1) (app myadd (fx- a diff) (fx+ diff b))))))' +
      ' (app myadd 22000 40))', '22040');
-test('(letrec (myadd (lambda (a b) '
-      + '(or (and (fxzero? a) b)' +
-      '      (app myadd (fxsub1 a) (fxadd1 b)))))' +
+test('(letrec (myadd (lambda (a b) ' +
+     '(or (and (fxzero? a) b)' +
+     '      (app myadd (fxsub1 a) (fxadd1 b)))))' +
      ' (app myadd 5461 40))', '5501');
+test('(let (pair (cons 42 -3))' +
+     '  (car pair))', '42');
+test('(let (pair (cons 42 -3))' +
+     '  (cdr pair))', '-3');
+test('(pair? 42)', '#f');
+test('(pair? #\\x)', '#f');
+test('(pair? #t)', '#f');
+test('(pair? #f)', '#f');
+test('(pair? ())', '#f');
+test('(pair? (cons 40 2))', '#t');
+test('(pair? (cons #f #t))', '#t');
+test('(pair? (cons #f (cons 40 2)))', '#t');
+test('(let (ll (cons 42 (cons 2 (cons 101 ()))))' +
+     '  (car (cdr (cdr ll))))', '101');
+
 
 
 runTests();
