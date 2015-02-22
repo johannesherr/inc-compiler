@@ -23,7 +23,7 @@ var ensure = function(msg, cond) {
   if (!cond) abort('expectation failed! (' + msg + ')');
 };
 
-var operators = ['+', '-', '*', '/', '<', '>', '?', '='];
+var operators = ['+', '-', '*', '/', '<', '>', '?', '!', '='];
 var bools = ['#f', '#t'];
 var nums = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 var alpha = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];
@@ -234,23 +234,34 @@ var compile = function(prog) {
       '  movl $' + BOOL_TRUE + ', %eax\n' +
       endLbl + ':\n';
   };
-  var fxToInt = function() {
-    return '  sar $' + INT_OFFSET + ', %eax\n';
+  var fxToInt = function(reg) {
+    reg = reg || '%eax';
+    return '  sar $' + INT_OFFSET + ', ' + reg + '\n';
   };
 
-  var eightByteAlign = function(si) {
+  var eightByteAlign = function(si, reg) {
+    reg = reg || '%eax';
     var endLabel = uniq_label('is_aligned');
-    return '  movl %eax, ' + si + '(%esp)\n' +
-      '  shl $' + (4 * 8 - TYPE_OFFSET) + ', %eax\n' +
-      '  shr $' + (4 * 8 - TYPE_OFFSET) + ', %eax\n' +
-      '  testl %eax, %eax\n' +
-      '  movl ' + si + '(%esp), %eax\n' +
+    return '  movl ' + reg + ', ' + si + '(%esp)\n' +
+      '  shl $' + (4 * 8 - TYPE_OFFSET) + ', ' + reg + '\n' +
+      '  shr $' + (4 * 8 - TYPE_OFFSET) + ', ' + reg + '\n' +
+      '  testl ' + reg + ', ' + reg + '\n' +
+      '  movl ' + si + '(%esp), ' + reg + '\n' +
       '  jz ' + endLabel + '\n' +
-      '  addl $8, %eax\n' +
-      '  shr $' + TYPE_OFFSET + ', %eax\n' +
-      '  shl $' + TYPE_OFFSET + ', %eax\n' +
+      '  addl $8, ' + reg + '\n' +
+      '  shr $' + TYPE_OFFSET + ', ' + reg + '\n' +
+      '  shl $' + TYPE_OFFSET + ', ' + reg + '\n' +
       endLabel + ':\n';
   };
+
+  var firstArg = function(si) {
+    return si + '(%esp)';
+  };
+
+  var secondArg = function(si) {
+    return (si - 4) + '(%esp)';
+  };
+
 
   var primitives = {
     fxadd1: {
@@ -335,20 +346,20 @@ var compile = function(prog) {
     'fx+': {
       argCount: 2,
       gen: function(si) {
-        return '  addl ' + si + '(%esp), %eax\n';
+        return '  addl ' + firstArg(si) + ', %eax\n';
       }
     },
     'fx-': {
       argCount: 2,
       gen: function(si) {
-        return '  subl %eax, ' + si + '(%esp)\n' +
+        return '  subl %eax, ' + firstArg(si) + '\n' +
           '  movl ' + si + '(%esp), %eax\n';
       }
     },
     'fx=': {
       argCount: 2,
       gen: function(si) {
-        return '  cmp ' + si + '(%esp), %eax\n' +
+        return '  cmp ' + firstArg(si) + ', %eax\n' +
           zfToBool();
       }
     },
@@ -380,7 +391,7 @@ var compile = function(prog) {
       argCount: 2,
       gen: function(si) {
        return fxToInt() +
-        '  imul ' + si + '(%esp), %eax\n';
+        '  imul ' + firstArg(si) + ', %eax\n';
       }
     },
     'fx/': {
@@ -388,7 +399,7 @@ var compile = function(prog) {
       gen: function(si) {
        return fxToInt() +
           '  movl %eax, ' + (si - 4) + '(%esp)\n' +
-          '  movl ' + si + '(%esp), %eax\n' +
+          '  movl ' + firstArg(si) + ', %eax\n' +
           '  movl %edx, ' + (si - 8) + '(%esp)\n' +
           '  cdq\n' +
           '  idivl ' + (si - 4) + '(%esp)\n' +
@@ -400,7 +411,7 @@ var compile = function(prog) {
       argCount: 2,
       gen: function(si) {
         return '  movl %eax, ' + CDR_OFFSET + '(%ebp)\n' +
-          '  movl ' + si + '(%esp), %eax\n' +
+          '  movl ' + firstArg(si) + ', %eax\n' +
           '  movl %eax, ' + CAR_OFFSET + '(%ebp)\n' +
           '  movl %ebp, %eax\n' +
           '  orl $' + PAIR_TAG + ', %eax\n' +
@@ -429,16 +440,28 @@ var compile = function(prog) {
     },
     'make-vector': {
       argCount: 2,
-      // TODO: initialise vector
       gen: function(si) {
-        return '  movl ' + si + '(%esp), %eax\n' +
-          '  movl %eax, (%ebp)\n' +
+        var endLabel = uniq_label('fill_array_end');
+        var startLabel = uniq_label('fill_array_start');
+        return '  movl ' + firstArg(si) + ', %ebx\n' +
+          // vector length is stored as encoded fx
+          '  movl %ebx, (%ebp)\n' +
           '  movl %ebp, ' + (si - 4) + '(%esp)\n' +
-          fxToInt() +
-          '  imul $4, %eax\n' +
-          '  addl $4, %eax\n' +
-          eightByteAlign(si - 8) +
-          '  addl %eax, %ebp\n' +
+          fxToInt('%ebx') +
+          '  movl %ebx, ' + (si - 8) + '(%esp)\n' +
+          startLabel + ':\n' +
+          '  testl %ebx, %ebx\n' +
+          '  jz ' + endLabel + '\n' +
+          '  subl $1, %ebx\n' +
+          '  leal 4(%ebp, %ebx, 4), %edx\n' +
+          '  movl %eax, (%edx)\n' +
+          '  jmp ' + startLabel + '\n' +
+          endLabel + ':\n' +
+          '  movl ' + (si - 8) + '(%esp), %ebx\n' +
+          '  imul $4, %ebx\n' +
+          '  addl $4, %ebx\n' +
+          eightByteAlign(si - 8, '%ebx') +
+          '  addl %ebx, %ebp\n' +
           '  movl ' + (si - 4) + '(%esp), %eax\n' +
           '  orl $' + VECTOR_TAG + ', %eax\n';
       }
@@ -447,6 +470,26 @@ var compile = function(prog) {
       argCount: 1,
       gen: function(si) {
         return '  movl ' + (0 - VECTOR_TAG) + '(%eax), %eax\n';
+      }
+    },
+    'vector-ref': {
+      argCount: 2,
+      gen: function(si) {
+        return fxToInt() +
+          '  movl ' + firstArg(si) + ', %ebx\n' +
+          '  leal ' + (4 - VECTOR_TAG) + '(%ebx,%eax,4), %ebx\n' +
+          '  movl (%ebx), %eax\n';
+      }
+    },
+    'vector-set!': {
+      argCount: 3,
+      gen: function(si) {
+        return '  movl ' + firstArg(si) + ', %ebx\n' +
+          '  movl ' + secondArg(si) + ', %edx\n' +
+          fxToInt('%edx') +
+          '  leal ' + (4 - VECTOR_TAG) + '(%ebx,%edx,4), %ebx\n' +
+          '  movl %eax, (%ebx)\n' +
+          '  movl ' + firstArg(si) + ', %eax\n';
       }
     }
   };
@@ -472,15 +515,17 @@ var compile = function(prog) {
             ' but was: ' + args.length);
     }
 
+    // last argument is in eax
+    // second in sp
+    // third in sp-4, ...
     var c = config.argCount, tmpSi = si;
     var asm = expression(env, si, args[0]);
-    c--;
-    while (c > 0) {
+    for (var i = 1; i < c; i++) {
       asm += '  movl %eax, ' + tmpSi + '(%esp)\n';
       tmpSi -= 4;
-      asm += expression(env, tmpSi, args[c]);
-      c--;
+      asm += expression(env, tmpSi, args[i]);
     }
+
     asm += config.gen(si);
 
     return asm;
@@ -1043,6 +1088,26 @@ test('(let (v (make-vector 1 #t)' +
 test('(let (v (make-vector 4 #t)' +
     '       p (cons 2 3))' +
     '   (pair? p))', '#t');
+// access vector
+test('(vector-ref (make-vector 101 42) 100)', '42');
+test('(vector-ref (make-vector 101 42) 0)', '42');
+test('(vector-ref (make-vector 1 42) 0)', '42');
+test('(let (v (make-vector 3 1)' +
+     '      v2 (vector-set! v 0 2))' +
+     '  (vector-ref v 0))', '2');
+test('(let (v (make-vector 3 1)' +
+     '      v2 (vector-set! v 0 2))' +
+     '  (vector-ref v2 0))', '2');
+test('(let (v (make-vector 3 1)' +
+     '      v2 (vector-set! v 0 2))' +
+     '  (vector-ref v 1))', '1');
+test('(let (v (make-vector 3 1)' +
+     '      v2 (vector-set! v 0 2))' +
+     '  (vector-length v2))', '3');
+test('(let (v (make-vector 3 0)' +
+     '      v2 (vector-set! v 0 (cons 2 3)))' +
+     '  (car (vector-ref v2 0)))', '2');
+
 
 
 
@@ -1056,10 +1121,7 @@ runTests();
 //      ' (app myadd 5461 40))';
 
 
-var prog = '(letrec (myadd (lambda (a b) '
-      + '(or (and (fxzero? a) b)' +
-      '      (app myadd (fxsub1 a) (fxadd1 b)))))' +
-     ' (app myadd 5461 40))';
+var prog = '(vector-ref (make-vector 101 42) 100)';
 
 
 /*
@@ -1068,6 +1130,6 @@ compileAndRun(prog, function(output) {
 });
 
 var asm = compile(prog);
-console.log( asm );
+nsole.log( asm );
 build(asm);
-*/
+co*/
