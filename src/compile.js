@@ -165,6 +165,7 @@ var compile = function(prog) {
   var TYPE_OFFSET = 3;
   var PAIR_TAG = 1;
   var PAIR_MASK = 0x7;
+  var STRING_MASK = 0x7;
   var SIZE_PAIR = 8;
   var CAR_OFFSET = 0;
   var CDR_OFFSET = 4;
@@ -491,6 +492,33 @@ var compile = function(prog) {
           '  movl %eax, (%ebx)\n' +
           '  movl ' + firstArg(si) + ', %eax\n';
       }
+    },
+    'string?': {
+      argCount: 1,
+      gen: function(si) {
+        return '  andl $' + STRING_MASK + ', %eax\n' +
+          '  cmpl $' + STRING_TAG + ', %eax\n' +
+          zfToBool();
+      }
+    },
+    'make-string': {
+      argCount: 1,
+      gen: function(si) {
+        return '  movl %ebp, %ebx\n' +
+          '  movl %eax, (%ebp)\n' +
+          '  addl $4, %ebp\n' +
+          fxToInt('%eax') +
+          '  addl %eax, %ebp\n' +
+          eightByteAlign(si, '%ebp') +
+          '  movl %ebx, %eax\n' +
+          '  orl $' + STRING_TAG + ', %eax\n';
+      }
+    },
+    'string-length': {
+      argCount: 1,
+      gen: function(si) {
+        return '  movl ' + (0 - STRING_TAG) + '(%eax), %eax\n';
+      }
     }
   };
 
@@ -592,7 +620,7 @@ var compile = function(prog) {
   };
 
   var letBlock = function(parentEnv, si, parts, tail) {
-    if (parts.length != 2) abort("a let blocks requires definition and" +
+    if (parts.length < 2) abort("a let blocks requires definition and" +
                                  " body (2 elements, but was " + parts.length + ")");
 
     // create new scope
@@ -602,7 +630,7 @@ var compile = function(prog) {
     }
 
     var defs = parts[0];
-    var body = parts[1];
+    var body = parts.slice(1);
 
     var asm = '';
 
@@ -613,7 +641,10 @@ var compile = function(prog) {
       si -= 4;
     }
 
-    asm += expression(env, si, body, tail);
+    for (var j = 0; j < body.length; j++) {
+      asm += expression(env, si, body[j], tail);
+    }
+
     return asm;
   };
 
@@ -714,7 +745,6 @@ var compile = function(prog) {
     var si = -4;
     ensure(ast[0].val == 'lambda', 'lambda expected, was: ' + ast[0].val);
     var params = ast[1];
-    var body = ast[2];
 
     var asm = '';
 
@@ -723,7 +753,11 @@ var compile = function(prog) {
       si -= 4;
     }
 
-    asm += expression(env, si, body, tail);
+    var bodyStatements = ast.slice(2);
+    for (var j = 0; j < bodyStatements.length; j++) {
+      asm += expression(env, si, bodyStatements[j], tail);
+    }
+
     asm += '  ret\n';
 
     return asm;
@@ -749,7 +783,10 @@ var compile = function(prog) {
     }
 
     asm += bodyLabel + ':             # letrec-body\n';
-    asm += expression(env, si, ast[2], false);
+    var bodyStatements = ast.slice(2);
+    for (var j = 0; j < bodyStatements.length; j++) {
+      asm += expression(env, si, bodyStatements[j], false);
+    }
 
     return asm;
   };
@@ -1107,9 +1144,22 @@ test('(let (v (make-vector 3 1)' +
 test('(let (v (make-vector 3 0)' +
      '      v2 (vector-set! v 0 (cons 2 3)))' +
      '  (car (vector-ref v2 0)))', '2');
-
-
-
+// let, letrec and lambda as do-block with side-effects
+test('(let (v (make-vector 3 0))' +
+     '  (vector-set! v 0 (cons 2 3))' +
+     '  (car (vector-ref v 0)))', '2');
+test(' (letrec (fill-help (lambda (vec val i)' +
+'                    (vector-set! vec i val)' +
+'                    (let (n (fxsub1 i))' +
+'                      (if (fx< 0 n)' +
+'                          (app fill-help vec val n)' +
+'                        vec)))' +
+'         fill (lambda (vec val) (app fill-help vec val (fxsub1 (vector-length vec)))))' +
+'   (let (v (make-vector 3 1))' +
+'     (app fill v 2)' +
+'     (vector-ref v 1)))', '2');
+test('(string? (make-string 0))', '#t');
+test('(string-length (make-string 3))', '3');
 
 
 
@@ -1121,7 +1171,20 @@ runTests();
 //      ' (app myadd 5461 40))';
 
 
-var prog = '(vector-ref (make-vector 101 42) 100)';
+//var prog = '(vector-ref (make-vector 101 42) 100)';
+
+var prog = ' (letrec (fill-help (lambda (vec val i)' +
+'                    (vector-set! vec i val)' +
+'                    (let (n (fxsub1 i))' +
+'                      (if (fx< 0 n)' +
+'                          (app fill-help vec val n)' +
+'                        vec)))' +
+'         fill (lambda (vec val) (app fill-help vec val (fxsub1 (vector-length vec)))))' +
+'   (let (v (make-vector 3 1))' +
+'     (app fill v 2)' +
+'     (vector-ref v 1)))';
+
+prog = '(string-length (make-string 3))';
 
 
 /*
@@ -1130,6 +1193,9 @@ compileAndRun(prog, function(output) {
 });
 
 var asm = compile(prog);
-nsole.log( asm );
+console.log( asm );
 build(asm);
-co*/
+ */
+
+// TODO: fix nulling
+// TODO: fix mem alignment
