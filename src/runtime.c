@@ -10,14 +10,31 @@
 #define ch_tag 0x0F
 #define ch_shift 8
 #define nil 0x3F
+#define obj_mask 0x07
+#define string_tag 0x06
 
 typedef unsigned int ptr;
+
+static void print_string(ptr x) {
+  int *p = (int*) (x - string_tag);
+  int length = *p;
+  int i;
+  length = length >> fx_shift;
+  char *cs = (char*) (p + 1);
+  printf("\"");
+  for (i = 0; i < length; i++) {
+    printf("%c", *(cs + i));
+  }
+  printf("\"");
+}
 
 static void print_ptr(ptr x) {
   if ((x & fx_mask) == fx_tag) {
     printf("%d", ((int) x) >> fx_shift);
   } else if ((x & ch_mask) == ch_tag) {
     printf("#\\%c", ((int) x) >> ch_shift);
+  } else if ((x & obj_mask) == string_tag) {
+    print_string(x);
   } else if (x == bool_f) {
     printf("#f");
   } else if (x == bool_t) {

@@ -519,6 +519,18 @@ var compile = function(prog) {
       gen: function(si) {
         return '  movl ' + (0 - STRING_TAG) + '(%eax), %eax\n';
       }
+    },
+    'string-set!': {
+      argCount: 3,
+      gen: function(si) {
+        return '  movl ' + firstArg(si) + ', %ebx\n' +
+          '  movl ' + secondArg(si) + ', %edx\n' +
+          fxToInt('%edx') +
+          '  leal ' + (4 - STRING_TAG) + '(%ebx, %edx), %edx\n' +
+          // characters not encoded, but 8-bit only
+          '  shr $' + CHAR_OFFSET + ', %eax\n' +
+          '  mov %al, (%edx)\n';
+      }
     }
   };
 
@@ -1160,6 +1172,12 @@ test(' (letrec (fill-help (lambda (vec val i)' +
 '     (vector-ref v 1)))', '2');
 test('(string? (make-string 0))', '#t');
 test('(string-length (make-string 3))', '3');
+test('(make-string 0)', '""');
+test('(let (s (make-string 3))' +
+     '     (string-set! s 0 #\\a)' +
+     '     (string-set! s 1 #\\b)' +
+     '     (string-set! s 2 #\\c)' +
+     '     s)', '"abc"');
 
 
 
