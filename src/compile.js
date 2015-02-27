@@ -531,6 +531,17 @@ var compile = function(prog) {
           '  shr $' + CHAR_OFFSET + ', %eax\n' +
           '  mov %al, (%edx)\n';
       }
+    },
+    'string-ref': {
+      argCount: 2,
+      gen: function(si) {
+        return '  movl ' + firstArg(si) + ', %ebx\n' +
+          '  ' + fxToInt('%eax') +
+          '  leal ' + (4 - STRING_TAG) + '(%ebx, %eax), %ebx\n' +
+          '  movl (%ebx), %eax\n' +
+          '  shl $' + CHAR_OFFSET + ', %eax\n' +
+          '  orl $' + CHAR_TAG + ', %eax\n';
+      }
     }
   };
 
@@ -726,16 +737,37 @@ var compile = function(prog) {
     if (!isAtom(ast)) return false;
     if (ast instanceof Array) return true;
 
-    return ['BOOL', 'NUMBER', 'CHAR', 'STRING'].indexOf(ast.type) !== -1;
+    return ['BOOL', 'NUMBER', 'CHAR'].indexOf(ast.type) !== -1;
   };
 
   var isVariable = function(ast) {
     return isAtom(ast) && ast.type == 'NAME';
   };
 
+  var stringLiteral = function(env, si, ast) {
+    var str = ast.val.slice(1, ast.val.length - 1);
+    var len = str.length + 4;
+    var nextObj = Math.floor((len + 7) / 8) * 8;
+
+    var asm = '  movl %ebp, %eax\n' +
+          '  movl $' + (str.length << INT_OFFSET) + ', (%eax)\n';
+
+    for (var i = 0; i < str.length; i++) {
+      var c = str.charCodeAt(i);
+      asm += '  movb $' + c + ', ' + (4 + i) + '(%eax)\n';
+    }
+
+    asm += '  addl $' + nextObj + ', %ebp\n' +
+          '  orl $' + STRING_TAG + ', %eax\n';
+
+    return asm;
+  };
+
   var expression = function(env, si, ast, tail) {
     if (isImmediate(ast)) {
 	    return '  movl	$' + immediate(ast) + ', %eax\n';
+    } else if (ast.type === 'STRING') {
+      return stringLiteral(env, si, ast);
     } else if (isVariable(ast)) {
       return varAccess(env, si, ast);
     } else if (isLiteral(ast[0], 'if')) {
@@ -1178,7 +1210,12 @@ test('(let (s (make-string 3))' +
      '     (string-set! s 1 #\\b)' +
      '     (string-set! s 2 #\\c)' +
      '     s)', '"abc"');
-
+// string literals
+test('"foo"', '"foo"');
+test('""', '""');
+// ref char in string
+test('(string-ref "foo" 0)', '#\\f');
+test('(string-ref "foo" 2)', '#\\o');
 
 
 runTests();
@@ -1202,7 +1239,7 @@ var prog = ' (letrec (fill-help (lambda (vec val i)' +
 '     (app fill v 2)' +
 '     (vector-ref v 1)))';
 
-prog = '(string-length (make-string 3))';
+prog = '"foo"';
 
 
 /*
