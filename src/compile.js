@@ -156,7 +156,6 @@ var compile = function(prog) {
   var CHAR_MASK = 0xFF;
   var INT_OFFSET = 2;
   var FX_MASK = 0x3;
-  var FX_MASK_INV = 0xFFFFFFFFC;
   var FX_TAG = 0x0;
   var BOOL_TRUE = 0x6F;
   var BOOL_FALSE = 0x2F;
@@ -240,19 +239,10 @@ var compile = function(prog) {
     return '  sar $' + INT_OFFSET + ', ' + reg + '\n';
   };
 
-  var eightByteAlign = function(si, reg) {
+  var eightByteAlign = function(reg) {
     reg = reg || '%eax';
-    var endLabel = uniq_label('is_aligned');
-    return '  movl ' + reg + ', ' + si + '(%esp)\n' +
-      '  shl $' + (4 * 8 - TYPE_OFFSET) + ', ' + reg + '\n' +
-      '  shr $' + (4 * 8 - TYPE_OFFSET) + ', ' + reg + '\n' +
-      '  testl ' + reg + ', ' + reg + '\n' +
-      '  movl ' + si + '(%esp), ' + reg + '\n' +
-      '  jz ' + endLabel + '\n' +
-      '  addl $8, ' + reg + '\n' +
-      '  shr $' + TYPE_OFFSET + ', ' + reg + '\n' +
-      '  shl $' + TYPE_OFFSET + ', ' + reg + '\n' +
-      endLabel + ':\n';
+    return '  addl $7, ' + reg + '  # align\n' +
+      '  andl $' + ~7 + ', ' + reg + '\n';
   };
 
   var firstArg = function(si) {
@@ -405,7 +395,7 @@ var compile = function(prog) {
           '  cdq\n' +
           '  idivl ' + (si - 4) + '(%esp)\n' +
           '  movl ' + (si - 8) + '(%esp), %edx\n' +
-          '  andl $' + FX_MASK_INV + ', %eax\n';
+          '  andl $' + ~FX_MASK + ', %eax\n';
       }
     },
     cons: {
@@ -461,7 +451,7 @@ var compile = function(prog) {
           '  movl ' + (si - 8) + '(%esp), %ebx\n' +
           '  imul $4, %ebx\n' +
           '  addl $4, %ebx\n' +
-          eightByteAlign(si - 8, '%ebx') +
+          eightByteAlign('%ebx') +
           '  addl %ebx, %ebp\n' +
           '  movl ' + (si - 4) + '(%esp), %eax\n' +
           '  orl $' + VECTOR_TAG + ', %eax\n';
@@ -509,7 +499,7 @@ var compile = function(prog) {
           '  addl $4, %ebp\n' +
           fxToInt('%eax') +
           '  addl %eax, %ebp\n' +
-          eightByteAlign(si, '%ebp') +
+          eightByteAlign('%ebp') +
           '  movl %ebx, %eax\n' +
           '  orl $' + STRING_TAG + ', %eax\n';
       }
@@ -1251,6 +1241,3 @@ var asm = compile(prog);
 console.log( asm );
 build(asm);
  */
-
-// TODO: fix nulling
-// TODO: fix mem alignment
