@@ -111,7 +111,7 @@ var lex = function(str) {
 };
 
 var parse = function(tokens) {
-  if (tokens[0].type != 'LPAREN') return tokens[0];
+  if (tokens[0].type != 'LPAREN') return tokens;
 
   var stack = [[]];
 
@@ -129,7 +129,7 @@ var parse = function(tokens) {
 
   if (stack.length > 1) abort('non empty expr stack: ' + stack.length);
 
-  return stack[0][0];
+  return stack[0];
 };
 
 var idGen = function() {
@@ -143,10 +143,14 @@ var idGen = function() {
 
 var id = idGen();
 
+var toLabel = function(str) {
+  return str.replace(/-/g, '_');
+};
+
 var uniq_label = (function() {
   var lables = idGen();
   return function(name) {
-    return "L_" + lables() + (name ? '_' + name.replace(/-/g, '_') : '');
+    return "L_" + lables() + (name ? '_' + toLabel(name) : '');
   };
 })();
 
@@ -170,7 +174,6 @@ var compile = function(prog) {
   var CDR_OFFSET = 4;
   var VECTOR_TAG = 5;
   var STRING_TAG = 6;
-
 
   var ast = parse(lex(prog));
 
@@ -681,6 +684,9 @@ var compile = function(prog) {
 
   var apply = function(env, si, ast, tail) {
     var fnLabel = env[ast[0].val];
+    if (!fnLabel) {
+      abort('unkown function: ' + ast[0].val);
+    }
 
     var asm = '';
 
@@ -775,8 +781,7 @@ var compile = function(prog) {
     }
   };
 
-  var lambda = function(env, ast, tail) {
-    var si = -4;
+  var lambda = function(env, si, ast, tail) {
     ensure(ast[0].val == 'lambda', 'lambda expected, was: ' + ast[0].val);
     var params = ast[1];
 
@@ -813,7 +818,7 @@ var compile = function(prog) {
       env[fnName] = label;
 
       asm += label + ':               # fn ' + fnName + '(..)\n';
-      asm += lambda(env, defs[i + 1], true);
+      asm += lambda(env, si, defs[i + 1], true);
     }
 
     asm += bodyLabel + ':             # letrec-body\n';
@@ -825,12 +830,41 @@ var compile = function(prog) {
     return asm;
   };
 
-  var programme = function(ast) {
+  var topExpression = function(env, si, ast) {
     if (!isAtom(ast) && ast[0].val == 'letrec') {
-      return letrec({}, -4, ast);
+      return letrec(env, si, ast);
     } else {
-      return expression({}, -4, ast);
+      return expression(env, si, ast);
     }
+  };
+
+  var programme = function(ast) {
+    var env = {};
+    var si = -4;
+    var asm = '';
+
+    for (var i = 0; i < ast.length; i++) {
+      var cur = ast[i];
+      if (!isAtom(cur) && cur[0].val == 'def') {
+        var name = cur[1].val;
+        var endLabel = uniq_label('end_' + name);
+        asm += '  jmp ' + endLabel + '\n';
+        asm += toLabel(name) + ':\n';
+        env[name] = toLabel(name);
+        if (isImmediate(cur[2])) {
+          asm += '  # global vars not implemented yet\n';
+          //            asm += topExpression(cur[2]);
+          //            asm += '  ret\n';
+        } else {
+          asm += lambda({}, si, cur[2], true);
+          asm += endLabel + ':\n';
+        }
+      } else {
+        asm += topExpression(env, si, cur);
+      }
+    }
+
+    return asm;
   };
 
   return '	.text\n' +
@@ -1206,6 +1240,8 @@ test('""', '""');
 // ref char in string
 test('(string-ref "foo" 0)', '#\\f');
 test('(string-ref "foo" 2)', '#\\o');
+test('(def foo (lambda (a b) (fx+ a b)))\n' +
+     '(app foo 40 2)', '42');
 
 
 runTests();
@@ -1229,15 +1265,21 @@ var prog = ' (letrec (fill-help (lambda (vec val i)' +
 '     (app fill v 2)' +
 '     (vector-ref v 1)))';
 
-prog = '"foo"';
+
+ prog = '(def foo (lambda (a b) (fx+ a b)))\n' +
+  '(def plus-one (lambda (elem) (fx+ elem 1)))\n' +
+  '(app x (app foo 40 2))';
+
 
 
 /*
+
 compileAndRun(prog, function(output) {
   console.log( 'result: ' + output );
 });
 
+
 var asm = compile(prog);
 console.log( asm );
 build(asm);
- */
+  */
