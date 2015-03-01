@@ -671,15 +671,17 @@ var compile = function(prog) {
   };
 
   var dbgStr = function(ast) {
+    var s;
     if (ast instanceof Array) {
       var ret = '( ';
       for (var i = 0; i < ast.length; i++) {
         ret += dbgStr(ast[i]) + ' ';
       }
-      return ret + ')';
+      s = ret + ')';
     } else {
-      return ast.val;
+      s = ast.val;
     }
+    return s.replace(/\r?\n/g, '');
   };
 
   var apply = function(env, si, ast, tail) {
@@ -740,8 +742,12 @@ var compile = function(prog) {
     return isAtom(ast) && ast.type == 'NAME';
   };
 
+  var stringContent = function(stringNode) {
+    return stringNode.val.slice(1, stringNode.val.length - 1);
+  };
+
   var stringLiteral = function(env, si, ast) {
-    var str = ast.val.slice(1, ast.val.length - 1);
+    var str = stringContent(ast);
     var len = str.length + 4;
     var nextObj = Math.floor((len + 7) / 8) * 8;
 
@@ -755,6 +761,80 @@ var compile = function(prog) {
 
     asm += '  addl $' + nextObj + ', %ebp\n' +
           '  orl $' + STRING_TAG + ', %eax\n';
+
+    return asm;
+  };
+
+  var toNativeType = function() {
+    var intLabel = uniq_label('to_int');
+    var stringLabel = uniq_label('to_string');
+    var endLabel = uniq_label('conversion_end');
+    var endStrLoopLabel = uniq_label('endStr_Loop');
+    var startStrLoopLabel = uniq_label('startStr_Loop');
+
+    var asm = '  movl %eax, %ebx\n' +
+          '  andl $' + FX_MASK + ', %ebx\n' +
+          '  cmpl $' + FX_TAG + ', %ebx\n' +
+          '  je ' + intLabel + '\n' +
+          '  movl %eax, %ebx\n' +
+          '  andl $' + STRING_MASK + ', %ebx\n' +
+          '  cmpl $' + STRING_TAG + ', %ebx\n' +
+          '  je ' + stringLabel + '\n' +
+          stringLabel + ':\n' +
+          '  movl %ebp, %edx\n' +
+          '  movl -' + STRING_TAG + '(%eax), %ebx\n' +
+          fxToInt('%ebx') +
+          '  addl $1, %ebx\n' +
+          '  addl %ebx, %ebp\n' +
+          eightByteAlign('%ebp') +
+          '  subl $1, %ebx\n' +
+          '  leal (%edx, %ebx), %edi\n' +
+          '  movb $0, (%edi)\n' +
+          startStrLoopLabel + ':\n' +
+          '  testl %ebx, %ebx\n' +
+          '  je ' + endStrLoopLabel + '\n' +
+          '  subl $1, %ebx\n' +
+          '  leal ' + (4 - STRING_TAG) + '(%eax, %ebx), %ecx\n' +
+          '  movb (%ecx), %cl\n' +
+          '  leal (%edx, %ebx), %edi\n' +
+          '  movb %cl, (%edi)\n' +
+          '  jmp ' + startStrLoopLabel + '\n' +
+          endStrLoopLabel + ':\n' +
+          '  movl %edx, %eax\n' +
+          '  jmp ' + endLabel + '\n' +
+          intLabel + ':\n' +
+          fxToInt('%eax') +
+          '  jmp ' + endLabel + '\n' +
+          endLabel + ':\n';
+
+    return asm;
+  };
+
+  var foreignCall = function(env, si, ast, tail) {
+    ensure(ast[0].type == 'STRING', 'Specify function to call as string.');
+
+    var asm = '';
+    var arguments = ast.slice(1);
+    var nArgs = arguments.length;
+    arguments.forEach(function(arg, i) {
+      asm += expression(env, si, arg, false);
+      asm += toNativeType();
+      asm += '  movl %eax, ' + (si - 4 * (nArgs - i - 1)) + '(%esp)\n';
+    });
+    si -= (nArgs - 1) * 4;
+
+    var foreignName = stringContent(ast[0]);
+
+    for (var name in env) {
+      if (env[name] == foreignName) {
+        abort('Lisp name "' + foreignName + '" is defined.' +
+              ' Cannot call foreign function with same name.');
+      }
+    }
+
+    asm += '  addl $' + si + ', %esp\n' +
+      '  call ' + foreignName + '\n' +
+      '  subl $' + si + ', %esp\n';
 
     return asm;
   };
@@ -776,6 +856,8 @@ var compile = function(prog) {
       return letBlock(env, si, ast.slice(1), tail);
     } else if (isLiteral(ast[0], 'app')) {
       return apply(env, si, ast.slice(1), tail);
+    } else if (isLiteral(ast[0], 'foreign-call')) {
+      return foreignCall(env, si, ast.slice(1), tail);
     } else {
       var func = env[ast[0].val];
       if (func) {
@@ -799,6 +881,7 @@ var compile = function(prog) {
 
     var bodyStatements = ast.slice(2);
     for (var j = 0; j < bodyStatements.length; j++) {
+      // TODO: only last expression is in tail position! (fix also letrec, let, ...)
       asm += expression(env, si, bodyStatements[j], tail);
     }
 
@@ -850,8 +933,8 @@ var compile = function(prog) {
       if (!isAtom(sexp) && sexp[0].val == 'defn') {
         var name = sexp[1];
         var params = sexp[2];
-        var body = sexp[3];
-        ret.push([nameToken('def'), name, [nameToken('lambda'), params, body]]);
+        var body = sexp.slice(3);
+        ret.push([nameToken('def'), name, [nameToken('lambda'), params].concat(body)]);
       } else {
         ret.push(sexp);
       }
@@ -875,12 +958,15 @@ var compile = function(prog) {
         asm += '  jmp ' + endLabel + '\n';
         asm += toLabel(name) + ':\n';
         env[name] = toLabel(name);
+
         if (isImmediate(cur[2])) {
-          asm += '  # global vars not implemented yet\n';
+          abort('Global vars not implemented yet.');
           //            asm += topExpression(cur[2]);
           //            asm += '  ret\n';
         } else {
-          asm += lambda({}, si, cur[2], true);
+          // TODO copy env
+          // TODO fix tail call handling
+          asm += lambda(env, si, cur[2], false);
           asm += endLabel + ':\n';
         }
       } else {
@@ -905,9 +991,11 @@ var compile = function(prog) {
     // set stack pointer and heap pointer
     '  movl 12(%esp), %ebp\n' +
     '  movl 8(%esp), %esp\n' +
+    '  push %ecx\n' +
 
     programme(ast) +
 
+    '  pop %ecx\n' +
     '  movl 4(%ecx), %ebx\n' +
     '  movl 16(%ecx), %esi\n' +
     '  movl 20(%ecx), %edi\n' +
@@ -1273,17 +1361,16 @@ test('(defn foo (a b) (fx+ a b))\n' +
 // no explicit apply calls
 test('(defn foo (a b) (fx+ a b))\n' +
      '(foo 40 2)', '42');
-
+test('(foreign-call "exit" 0)', '');
+test('(foreign-call "printf" "hello world!") (foreign-call "exit" 0)', 'hello world!');
+test('(foreign-call "printf" "magic number is: %d" (fx+ 40 2)) (foreign-call "exit" 0)',
+     'magic number is: 42');
+test('(defn puts (s) (foreign-call "printf" s))' +
+       '(defn done () (puts "\n\n") (foreign-call "exit" 0))' +
+       '(puts "A small compiler.") (done)', 'A small compiler.');
 
 runTests();
 
-
-// var prog = '(letrec (myadd (lambda (a b) '
-//       + '(if (fxzero? a) b (app myadd (fxsub1 a) (fxadd1 b)))))' +
-//      ' (app myadd 5461 40))';
-
-
-//var prog = '(vector-ref (make-vector 101 42) 100)';
 
 var prog = ' (letrec (fill-help (lambda (vec val i)' +
 '                    (vector-set! vec i val)' +
@@ -1297,10 +1384,10 @@ var prog = ' (letrec (fill-help (lambda (vec val i)' +
 '     (vector-ref v 1)))';
 
 
- prog = '(def foo (lambda (a b) (fx+ a b)))\n' +
-  '(def plus-one (lambda (elem) (fx+ elem 1)))\n' +
-  '(app x (app foo 40 2))';
 
+prog = '(defn puts (s) (foreign-call "printf" s))' +
+       '(defn done () (puts "\n\n") (foreign-call "exit" 0))' +
+       '(puts "A small compiler.") (done)';
 
 
 /*
@@ -1309,8 +1396,8 @@ compileAndRun(prog, function(output) {
   console.log( 'result: ' + output );
 });
 
-
 var asm = compile(prog);
 console.log( asm );
 build(asm);
+
   */
