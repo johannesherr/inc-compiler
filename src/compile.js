@@ -838,10 +838,29 @@ var compile = function(prog) {
     }
   };
 
+  var desugar = function() {
+    var ret = [];
+
+    ast.forEach(function(sexp) {
+      if (!isAtom(sexp) && sexp[0].val == 'defn') {
+        var name = sexp[1];
+        var params = sexp[2];
+        var body = sexp[3];
+        ret.push([nameToken('def'), name, [nameToken('lambda'), params, body]]);
+      } else {
+        ret.push(sexp);
+      }
+    });
+
+    return ret;
+  };
+
   var programme = function(ast) {
     var env = {};
     var si = -4;
     var asm = '';
+
+    ast = desugar(ast);
 
     for (var i = 0; i < ast.length; i++) {
       var cur = ast[i];
@@ -1240,7 +1259,11 @@ test('""', '""');
 // ref char in string
 test('(string-ref "foo" 0)', '#\\f');
 test('(string-ref "foo" 2)', '#\\o');
+// global functions
 test('(def foo (lambda (a b) (fx+ a b)))\n' +
+     '(app foo 40 2)', '42');
+// syntactic sugar
+test('(defn foo (a b) (fx+ a b))\n' +
      '(app foo 40 2)', '42');
 
 
