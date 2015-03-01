@@ -777,7 +777,12 @@ var compile = function(prog) {
     } else if (isLiteral(ast[0], 'app')) {
       return apply(env, si, ast.slice(1), tail);
     } else {
-      return primitive(env, si, ast[0], ast.slice(1));
+      var func = env[ast[0].val];
+      if (func) {
+        return apply(env, si, ast.slice(0), tail);
+      } else {
+        return primitive(env, si, ast[0], ast.slice(1));
+      }
     }
   };
 
@@ -1265,6 +1270,9 @@ test('(def foo (lambda (a b) (fx+ a b)))\n' +
 // syntactic sugar
 test('(defn foo (a b) (fx+ a b))\n' +
      '(app foo 40 2)', '42');
+// no explicit apply calls
+test('(defn foo (a b) (fx+ a b))\n' +
+     '(foo 40 2)', '42');
 
 
 runTests();
